@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "display_name": "Original Character Selfie"
+  },
+  "pages": {
+    "selfie": {
+      "title": "Selfie Workspace",
+      "description": "Generation test, materials, world settings and event editor"
+    }
+  },
+  "views": {
+    "selfie": {
+      "title": "Selfie Workspace",
+      "description": "Generation test, materials, world settings and event editor"
+    }
+  }
+}

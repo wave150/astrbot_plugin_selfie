@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "display_name": "原创角色自拍"
+  },
+  "pages": {
+    "selfie": {
+      "title": "自拍工作台",
+      "description": "生图测试、素材入库、世界设置与事件编辑"
+    }
+  },
+  "views": {
+    "selfie": {
+      "title": "自拍工作台",
+      "description": "生图测试、素材入库、世界设置与事件编辑"
+    }
+  }
+}

@@ -1,0 +1,348 @@
+{
+  "api_base": {
+    "type": "string",
+    "default": "",
+    "description": "生图主站地址",
+    "hint": "主站 OpenAI 兼容 API 根地址，例如 https://example.com/v1。必须显式配置，不再借用其他模型服务的地址。"
+  },
+  "api_key": {
+    "type": "string",
+    "default": "",
+    "description": "生图主站密钥",
+    "hint": "主站的 API 密钥，与主站地址配套填写。不要把真实密钥提交到 Git 或公开截图。"
+  },
+  "api_base_backup": {
+    "type": "string",
+    "default": "",
+    "description": "生图副站地址",
+    "hint": "可选副站的 OpenAI 兼容 API 根地址。主站模型链失败后尝试；留空不启用副站。"
+  },
+  "api_key_backup": {
+    "type": "string",
+    "default": "",
+    "description": "生图副站密钥",
+    "hint": "副站 API 密钥，与副站地址配套填写；不使用副站时留空。"
+  },
+  "model": {
+    "type": "string",
+    "default": "gpt-image-2.5-flare",
+    "description": "生图模型",
+    "hint": "主站与副站使用的生图模型名称。服务需支持 OpenAI 兼容图片接口；有参考图时调用 /images/edits。"
+  },
+  "image_model_fallback": {
+    "type": "string",
+    "default": "gpt-image-2.5-sunburst, gpt-image-2",
+    "description": "主站备用模型",
+    "hint": "主站的备用模型，逗号分隔，按顺序各尝试一次；主站模型链失败后再尝试副站一次。余额不足或密钥失效直接报错。留空沿用内置备用模型。"
+  },
+  "image_size": {
+    "type": "string",
+    "default": "1024x1792",
+    "description": "图片尺寸",
+    "hint": "生成图片尺寸，例如 1024x1792 或 1024x1536；请填写主副站实际支持的尺寸。"
+  },
+  "image_max_refs": {
+    "type": "int",
+    "default": 2,
+    "description": "主站参考图上限",
+    "hint": "主站每次请求允许的参考图总数，默认2。请按服务实际能力设置。"
+  },
+  "image_max_refs_backup": {
+    "type": "int",
+    "default": 1,
+    "description": "副站参考图上限",
+    "hint": "副站每次请求允许的参考图总数，默认1。请按服务实际能力设置；单图站建议配置身体与头部合成参考图。"
+  },
+  "image_min_gap_seconds": {
+    "type": "int",
+    "default": 12,
+    "description": "生图请求间隔",
+    "hint": "两次生图尝试的最小间隔，单位秒，默认12。用于降低服务限流风险。"
+  },
+  "character_name": {
+    "type": "string",
+    "default": "",
+    "description": "角色名字",
+    "hint": "当前唯一角色的名字。角色字段全部留空时兼容旧角色；任一角色字段非空即使用自定义角色，不再回退旧角色图片。"
+  },
+  "character_aliases": {
+    "type": "list",
+    "default": [],
+    "description": "角色别名",
+    "hint": "当前角色的称呼别名。"
+  },
+  "character_description": {
+    "type": "string",
+    "default": "",
+    "description": "角色设定",
+    "hint": "原创角色身份和外观描述；与上传的角色参考图一致，不填写旧角色的人设。"
+  },
+  "character_hair": {
+    "type": "string",
+    "default": "",
+    "description": "发型与发色",
+    "hint": "角色发型与发色；留空遵循当前角色参考图。"
+  },
+  "character_default_outfit": {
+    "type": "string",
+    "default": "",
+    "description": "默认服装",
+    "hint": "自定义角色默认服装；留空保留身体参考图的服装。"
+  },
+  "character_default_hat": {
+    "type": "string",
+    "default": "",
+    "description": "默认头饰",
+    "hint": "自定义角色默认头饰或帽子。"
+  },
+  "character_voice": {
+    "type": "string",
+    "default": "",
+    "description": "说话风格",
+    "hint": "角色接单与日常文案的说话风格。"
+  },
+  "character_reference_body": {
+    "type": "string",
+    "default": "",
+    "description": "身体参考图",
+    "hint": "当前原创角色身体参考图路径；绝对路径或相对插件目录的路径。只供管理员配置，不是公开文件上传API。"
+  },
+  "character_reference_head": {
+    "type": "string",
+    "default": "",
+    "description": "头部参考图",
+    "hint": "当前原创角色头部参考图路径；与身体图属于同一角色。"
+  },
+  "character_reference_single": {
+    "type": "string",
+    "default": "",
+    "description": "单图合成参考",
+    "hint": "单图服务使用的身体与头部合成参考图路径。留空先尝试身体参考图。"
+  },
+  "outfit_sleepwear": {
+    "type": "string",
+    "default": "",
+    "description": "夜间睡衣",
+    "hint": "自定义角色夜间家居服。留空使用通用不透明长袖睡衣长裤；不改变旧角色睡衣策略。"
+  },
+  "outfit_schoolwear": {
+    "type": "string",
+    "default": "",
+    "description": "学校服装",
+    "hint": "自定义角色学校场景服装；留空保留角色默认服装，不强制套用JK。"
+  },
+  "outfit_winterwear": {
+    "type": "string",
+    "default": "",
+    "description": "冬季服装",
+    "hint": "自定义角色寒冷室外服装；留空用通用保暖外套长裤。"
+  },
+  "admins_id": {
+    "type": "list",
+    "default": [],
+    "description": "管理员账号",
+    "hint": "（可选）只允许这些 QQ 号使用 admin 用法（如 admin特写14、admin自拍 女仆装）。留空则沿用 AstrBot 全局管理员列表；填了就以这里为准，其他人即使全局管理员也用不了"
+  },
+  "style": {
+    "type": "string",
+    "default": "realistic",
+    "description": "默认画风",
+    "hint": "默认画风：anime=二次元动漫；realistic=写实真人（推荐，也是默认）。群友可以自己说「自拍风格改为二次元/真人」设定个人偏好，优先级高于这里；当场点名画风优先级最高"
+  },
+  "ack_llm": {
+    "type": "bool",
+    "default": true,
+    "description": "智能接单回复",
+    "hint": "接单确认语是否用大模型生成（结尾统一加 🤳）；关掉则用内置短句"
+  },
+  "allow_text_only": {
+    "type": "bool",
+    "default": false,
+    "description": "允许无图生成",
+    "hint": "是否允许纯文生图兜底。默认关闭 —— 没有参考图时生成的图和她的长相完全不像，宁可报错也不要发一张不像的。只有找不到参考图或接口不支持 edits 时才会用到"
+  },
+  "custom_qzone_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "允许公开发空间",
+    "hint": "明确允许自定义角色发布QQ空间照片。默认关闭，旧角色原有发布策略不变；开启会调用付费生成并公开图片。"
+  },
+  "qzone_model": {
+    "type": "string",
+    "default": "gpt-image-2.5-flare",
+    "description": "空间配图模型",
+    "hint": "QQ 空间配图用的模型，默认和自拍一致（同样贴三视图）"
+  },
+  "ref_image": {
+    "type": "string",
+    "default": "",
+    "description": "内置动漫参考图",
+    "hint": "使用插件自带角色（自定义角色字段全部留空）时的二次元版参考图路径，仅编辑模型使用。留空自动用 assets/ref_front_9x16.png（二次元三视图裁出的 9:16 正面图）；填写了任一自定义角色字段后本项不生效"
+  },
+  "ref_image_real": {
+    "type": "string",
+    "default": "",
+    "description": "内置真人参考图",
+    "hint": "使用插件自带角色时的真人版参考图路径（仅编辑模型用）。留空自动用 assets/ref_real_front_9x16.png（真人三视图裁出的 9:16 正面图），并自动追加 assets/ref_real_face.png 脸部特写强化五官；填写了自定义角色后本项不生效"
+  },
+  "ref_image_real_single": {
+    "type": "string",
+    "default": "",
+    "description": "内置单图参考",
+    "hint": "单图模式（副站只吃 1 张参考图）专用的真人参考图。留空自动用 assets/ref_real_faceandbody.png（身体和脸在同一张）；填写了自定义角色后本项不生效"
+  },
+  "selfie_probability": {
+    "type": "float",
+    "default": 0.7,
+    "description": "自拍响应概率",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "hint": "普通用户请求自拍时生成的概率"
+  },
+  "daily_limit": {
+    "type": "int",
+    "default": 15,
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "description": "每日用户额度",
+    "hint": "普通成员每人每天最多能要看几张自拍（按账号单独计数，默认 15，管理员不限）"
+  },
+  "holiday_override": {
+    "type": "string",
+    "default": "",
+    "description": "节日服装预览",
+    "hint": "节日套装预览：留空=按当天日期自动判断（万圣节 10-31 / 圣诞节 12-25 / 春节）；可填 halloween / christmas / spring_festival（或 万圣节/圣诞节/春节）强制预览"
+  },
+  "selfie_memory_cross_context": {
+    "type": "bool",
+    "default": false,
+    "description": "跨会话照片记忆",
+    "hint": "是否允许照片记忆跨私聊/群聊共享。默认关闭，避免把一个会话的照片细节注入另一个会话；开启后所有会话共享同一份照片记忆"
+  },
+  "selfie_memory_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "照片记忆",
+    "hint": "自拍记忆：发出自拍后记住「在哪、在干嘛、穿什么」，之后聊天时自动告诉模型；也能认出对方发回来的那张自己的照片，避免说自己没拍过。关掉则完全不做记忆注入"
+  },
+  "cos_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "角色扮演拍照",
+    "hint": "cosplay 模块：群友点名 cos 某个二次元角色时，先去网上搜角色图、发图确认，再用「角色图+三视图」生成 cos 照片。关掉则只说功能关闭"
+  },
+  "cos_search_hint": {
+    "type": "string",
+    "default": "",
+    "description": "角色搜索提示",
+    "hint": "（可选）角色搜索补充说明，比如填「优先用日文名搜索」；一般留空即可"
+  },
+  "closeup_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "特写功能",
+    "hint": "特写模块：说「特写」就拍一张近距离特写（把自拍的手机前置视角换成画外相机、局部/半身大胆裁切），场景/天气/衣服/睡衣/额度逻辑和自拍完全共用"
+  },
+  "closeup_pm_ids": {
+    "type": "string",
+    "default": "",
+    "description": "特殊特写编号",
+    "hint": "需要加「pm」才能抽到的特写提示词编号（按 txt 行号，从 1 开始，逗号分隔）。留空 = 不启用（所有提示词都走普通「特写」）；填 2,6 则第 2、6 条只有「特写pm」才抽得到"
+  },
+  "interact_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "互动拍照",
+    "hint": "启用摸摸、捏捏等互动拍照，使用当前角色名字或别名触发。共享场景、服装和用户额度规则。"
+  },
+  "self_note_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "照片自动描述",
+    "hint": "发图自述：每发出一张自拍/特写/cos 照片后，用看图模型看一眼，把「画面里有几个人、手在干嘛、穿什么、背景、有没有时间戳文字」记进这张照片的记录里。之后被问起时按这段回答，不会再说自己没发过、也不会瞎编画面里没有的人或事"
+  },
+  "self_note_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "照片描述模型",
+    "hint": "照片自动描述使用的 AstrBot 看图模型ID。留空使用 AstrBot 默认图片转述模型。"
+  },
+  "costume_match_llm": {
+    "type": "bool",
+    "default": true,
+    "description": "智能服装匹配",
+    "hint": "点菜换装用大模型做语义模糊匹配：把你说的衣服（比如「来一个冬季穿的衣服」）交给模型去衣柜里找最接近的一套（会找到「冬日毛呢大衣」），匹配不上就让它现场写一套并自动追加进 costumes.txt。关掉则退回正则/别名匹配"
+  },
+  "costume_match_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "服装匹配模型",
+    "hint": "换装模糊匹配用的模型 ID。留空用当前对话模型。只发「用户那句话 + 衣柜名字别名 + 判断规则」三样，不发聊天历史/场景/图片"
+  },
+  "costume_match_with_desc": {
+    "type": "bool",
+    "default": false,
+    "description": "匹配附带服装详情",
+    "hint": "换装匹配时是否连衣服描述一起发给模型。默认只发「名字 | 别名」——判断该穿哪套不需要描述，省 token、响应更快；同名不同款容易混时可以打开"
+  },
+  "costume_match_timeout": {
+    "type": "int",
+    "default": 12,
+    "description": "服装匹配超时",
+    "hint": "换装模糊匹配的等待秒数。超时自动退回正则/别名匹配，不会卡住不发图"
+  },
+  "learn_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "学习功能",
+    "hint": "学习功能总开关：唤醒时同时出现「学习」+「衣服/服装/服饰」就学衣服（追加进 costumes.txt），「学习」+「造型/姿势/特写」就学造型（追加进 closeup_prompts.txt）。学完先拍一张让她确认，回「不是」自动删掉那一条"
+  },
+  "learn_admin_only": {
+    "type": "bool",
+    "default": true,
+    "description": "仅管理员可学习",
+    "hint": "学习功能是否只有主人（管理员）能用。默认开——衣柜和特写池是共享的，免得群友随便往里加；关掉后 @ 她的人都能教她"
+  },
+  "learn_vision_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "学习看图模型",
+    "hint": "学习衣服或姿势使用的 AstrBot 看图模型ID；需要支持图片。留空按插件已有看图模型选择规则处理。"
+  },
+  "learn_vision_model": {
+    "type": "string",
+    "default": "",
+    "description": "备用看图模型",
+    "hint": "可选中转看图模型名称。留空只使用 AstrBot 已配置的看图模型；填写后允许在这些通道失败时调用生图站的文字视觉接口，可能额外计费。"
+  },
+  "closeup_scene_adapt": {
+    "type": "bool",
+    "default": true,
+    "description": "特写环境补充",
+    "hint": "特写环境补充：LLM只返回承托表面、接触点与空间关系JSON，程序保留原提示词全文并追加校验后的环境说明。失败或不合格则原样回退；词法校验不保证完全没有语义冲突。"
+  },
+  "livingmemory_diary_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "日记同步记忆",
+    "hint": "把每天的生活日记写成一条长期记忆，聊天时能被 LivingMemory 回忆到，也能在它的 WebUI 记忆列表里看到。需要同实例安装并启用 astrbot_plugin_livingmemory；没装或没初始化时只会安静跳过，不影响自拍。"
+  },
+  "livingmemory_diary_importance": {
+    "type": "float",
+    "default": 0.7,
+    "description": "日记记忆权重",
+    "hint": "日记写入 LivingMemory 时的 importance（0-1）。0.6-0.8 比较合适：太高会挤占日常记忆，太低可能被召回阈值过滤掉。"
+  },
+  "diary_llm_format_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "日记AI整理",
+    "hint": "每天把实际活动记录交给文本模型整理成「上午 / 中午 / 下午 / 晚上 / 今日一句」五段日记（中午带一句评价、最后一句写今天最有意思的事或吐槽）。关闭或模型失败时用固定格式兜底，不会丢失当天记录。"
+  }
+}

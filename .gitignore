@@ -1,0 +1,77 @@
+# Python/build caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Private runtime data, generated photos and identity namespaces
+/data/
+/runtime/
+/private/
+/private_backups/
+/backups/
+/backup/
+/generated/
+/selfies/
+/characters/
+/photos/
+/cos_images/
+/learned/
+state.json
+state.*.json
+*.log
+/logs/
+*.tmp
+*.bak
+*.backup
+
+# Actual local configuration and secrets, NOT schema/example JSON
+/config/
+config.json
+config.local.json
+config.private.json
+*_config.json
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Personal reference assets (text/source assets remain visible)
+/assets/**/[Rr][Ee][Ff]*
+/assets/**/*.[Pp][Nn][Gg]
+/assets/**/*.[Jj][Pp][Gg]
+/assets/**/*.[Jj][Pp][Ee][Gg]
+/assets/**/*.[Ww][Ee][Bb][Pp]
+/assets/**/*.[Gg][Ii][Ff]
+/assets/**/*.[Bb][Mm][Pp]
+/assets/**/*.[Tt][Ii][Ff]
+/assets/**/*.[Tt][Ii][Ff][Ff]
+/assets/**/*.[Aa][Vv][Ii][Ff]
+/assets/**/*.[Hh][Ee][Ii][Cc]
+
+# Built-in references shipped with the plugin under the MIT license.
+# Any newly added personal reference image stays ignored unless listed here.
+!/assets/ref_front_9x16.png
+!/assets/ref_real_front_9x16.png
+!/assets/ref_real_face.png
+!/assets/ref_real_faceandbody.png
+
+# Backup archives must not be published
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+
+# Explicitly keep source schema and sanitized JSON examples discoverable.
+!_conf_schema.json
+!examples/*.json
+!examples/**/*.json
+!tests/fixtures/*.json
+!tests/fixtures/**/*.json
