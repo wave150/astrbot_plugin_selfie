@@ -174,15 +174,34 @@ def meal_photo(scene, rng=None):
     staple, hand, table = staple_note(dish)
     framing, pose = picker.choice(MEAL_SETUPS)
     place = "自家厨房的餐桌前" if phase == "lunch" else "附近小餐馆的餐桌前"
+    body = pose.format(dish=dish, staple=staple, hand=hand, table=table, place=place)
+    detail = str(scene.get("meal_desc") or "").strip()
+    if detail:
+        body += f"桌上这份菜的细节：{detail}；"
     return {
         "kind": "eat",
         "dish": dish,
         "staple": staple,
         "framing": framing,
-        "pose": pose.format(dish=dish, staple=staple, hand=hand, table=table, place=place),
+        "pose": body,
         "tail": EAT_TAIL + "；不要把她画成端着空碗或只拿着筷子不吃。",
         "place": place,
     }
+
+
+def meal_cue(dish, description="", rng=None):
+    """生图测试「吃饭」动作使用：按选中菜品拼一段可直接当动作提示词的文字。"""
+    dish = str(dish or "").strip()
+    if not dish:
+        return ""
+    pair = staple_note(dish)
+    framing, pose = (rng if rng is not None else random).choice(MEAL_SETUPS)
+    text = framing + pose.format(dish=dish, staple=pair[0], hand=pair[1],
+                                 table=pair[2], place="餐桌前")
+    detail = str(description or "").strip()
+    if detail:
+        text += f"桌上这份菜的细节：{detail}；"
+    return "这一张拍的是她坐在餐桌前吃饭：" + text + EAT_TAIL + "；不要只拍脸或空桌子。"
 
 
 def meal_text(photo):

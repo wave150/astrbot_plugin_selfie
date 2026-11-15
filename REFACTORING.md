@@ -160,6 +160,16 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 5. 若旧版确实无法读取新 runtime，先保留最新副本，再单独评估并恢复必要运行数据。**恢复完整旧 runtime 会失去备份之后的活动与新照片记录**；这是数据回退，不是无损操作。custom namespace 在旧版中可能不可见，保留它们等待迁移，不要删除。
 6. 核查代码、配置与运行目录对应关系后启动，先检查日志/状态读取，不要立即触发付费生图或空间发布。发现不兼容则停止并从刚保存的当前副本恢复，另行处理迁移。
 
+## v1.5.17 菜品素材、数据目录与日志器合规
+
+- `materials.py`：新增第四类 `meal`（`meals.txt`，格式 `菜名 | 描述`）；新增 `ensure_files()` 在首次加载时把插件包里的默认素材复制到数据目录；`MaterialStore` 支持 `fallback_root`：数据目录缺文件时只读回退插件包默认值，写入始终落在数据目录。
+- `main.py`：`_material_dir()` / `_resolve_material_path()` 统一素材路径；`_meal_library()` 按 mtime 热加载菜品；吃饭/做饭提示词按菜名引用菜品描述。
+- `workspace.py`：`_store_for()` 统一素材库根目录为数据目录；生图测试 `action_source` 支持 `meal` + `meal_id`，用 `meal.meal_cue()` 生成吃饭提示词；新增 `_MEAL_INSTRUCTION`（约 100 字、写菜/主食/餐具）。
+- `workspace_host.py`：去掉 `import logging` 兜底，日志器只依赖 `astrbot.api.logger`（审核要求）。
+- `world.py`：`_scene_reusable()` 在 00:30 分界处不再复用同小时旧场景，保证「关灯」生效。
+- `views/selfie/index.html`：素材类型增加「菜品」，生图测试动作来源增加「吃饭（菜品库）」及菜品下拉；菜品草稿提示、列表、编辑、删除复用现有流程（支持文字 / 参考图 / 两者）。
+- 测试：新增 `tests/test_meal_material.py`、`tests/test_bed_boundary.py`；总计 398 项通过。
+
 ## v1.5.16 吃饭 / 做饭提示词（selfie_core/meal.py）
 
 - 新增纯函数模块 `selfie_core/meal.py`：`meal_photo(scene, rng)` 在 `living_phase` 为 `cook` / `lunch` / `lunch_out` 时返回机位、动作和「饭菜必须入画」的补充要求；`meal_photo_prompt()` 供自定义角色路径使用整段文字版。

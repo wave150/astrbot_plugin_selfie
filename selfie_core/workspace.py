@@ -21,10 +21,25 @@ from . import legacy_world
 from .living import validate_event, LivingEngine
 from .event_materials import migrate_event, resolve_event
 from .overnight import overnight_list
+from .meal import meal_cue
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
 _PATH_KEYS = {"costume": "costume_file", "closeup": "closeup_prompt_file", "interaction": "interact_prompt_file"}
+
+
+def _store_for(host, settings):
+    """素材库统一落在数据目录；插件目录只作为缺失文件的只读默认值。"""
+    root = Path(getattr(host, "data_dir", "") or host.plugin_dir)
+    paths = {}
+    for kind, key in _PATH_KEYS.items():
+        raw = (settings or {}).get(key)
+        if not raw:
+            continue
+        path = Path(raw)
+        paths[kind] = path if path.is_absolute() else root / path
+    return MaterialStore(root, paths, backup_dir=root / "material_backups",
+                         fallback_root=Path(host.plugin_dir))
 HOME_ROOMS = {
     "厨房": (
         "家里的厨房：L 形白色石英石台面沿左墙与北墙铺开，台面左侧是双槽不锈钢水槽和沥水架，"
@@ -193,6 +208,14 @@ _CLOSEUP_INSTRUCTION = (
     "明确身体支撑与接触关系，避免肢体扭曲。不要固定人物身份、发色、服装、地点或场景，"
     "让动作适配当前角色与实际环境。不要编号、标题、字段分隔符、解释或代码围栏。"
 )
+_MEAL_INSTRUCTION = (
+    "你只生成一条「菜品素材」。输出唯一一行：菜名 | 饭菜描述。"
+    "描述约100字（90-120字），只写这一顿饭本身：盘碗里是什么菜、主食是什么、"
+    "装盘和餐具（碗/盘/筷/勺/杯子）、桌面摆了什么、菜的温度和光泽。"
+    "必须写成一眼能看出「这是一顿完整的饭」：家常炒菜要写旁边有一小碗白米饭；"
+    "面/粉本身是主食，可配一小碟醋或辣油；汉堡炸鸡要写可乐和薯条。"
+    "不写人物身份、面容、动作、地点或背景环境，不要编号、标题、解释、代码围栏或其他行。"
+)
 _INTERACTION_INSTRUCTION = (
     "你只生成一条互动拍摄提示词。输出唯一一行，以摸摸:或捏捏:开头，正文至少500字。"
     "明确画外互动手的触点、触碰方向与力度、手指和关节动作、人物反应、身体支撑关系、"
@@ -228,9 +251,7 @@ class WorkspaceService:
         self._drafts = {}
         self._collecting = False
         self.initialize()
-        self.materials = MaterialStore(host.plugin_dir, {
-            kind: self._document["settings"].get(key) for kind, key in _PATH_KEYS.items()
-        }, backup_dir=Path(host.data_dir) / "material_backups")
+        self.materials = _store_for(host, self._document["settings"])
         self._upgrade_event_libraries()
         self._upgrade_event_identity()
 
@@ -734,7 +755,7 @@ class WorkspaceService:
         default_source = "event" if mode == "event" else "daily"
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
-        if costume_source not in ("daily", "event") or action_source not in ("daily", "event"):
+        if costume_source not in ("daily", "event") or action_source not in ("daily", "event", "meal"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
         event = None
@@ -780,6 +801,18 @@ class WorkspaceService:
             if text is None:
                 raise WorkspaceError("该事件没有动作描述，请先在事件编辑里填写或 AI 生成")
             cue_override = {"text": text}
+        elif action_source == "meal":
+            meal_id = payload.get("meal_id")
+            meal_entry = None
+            if type(meal_id) is int:
+                meal_entry = next((x for x in self.materials.list("meal")
+                                   if x["id"] == meal_id), None)
+            if meal_entry is None:
+                raise WorkspaceError("请选择菜品（先在「添加素材」里添加菜品）")
+            cue_override = {"text": meal_cue(meal_entry["name"], meal_entry["description"],
+                                             getattr(self.host, "rng", None))}
+            if meta is not None:
+                meta["meal_name"] = meal_entry["name"]
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 
@@ -1065,6 +1098,7 @@ class WorkspaceService:
                 "costume": _COSTUME_INSTRUCTION,
                 "closeup": _CLOSEUP_INSTRUCTION,
                 "interaction": _INTERACTION_INSTRUCTION,
+                "meal": _MEAL_INSTRUCTION,
             }
             task_text = payload.get("text") or ""
             if not isinstance(task_text, str):
@@ -1178,9 +1212,7 @@ class WorkspaceService:
                         self.host.state.get(k) for k in ("city", "scene", "trip", "pending_target", "living", "night_plan")):
                     raise WorkspaceError("已有生活或旅行状态，修改家庭位置前请先备份并显式迁移或重置世界状态")
                 revision = self._commit(payload.get("revision"), lambda doc: doc.update(settings=settings))
-                paths = {k: settings.get(v) for k, v in _PATH_KEYS.items()}
-                replacement = MaterialStore(self.host.plugin_dir, paths,
-                                            backup_dir=Path(self.host.data_dir) / "material_backups")
+                replacement = _store_for(self.host, settings)
                 if replacement.paths != self.materials.paths:
                     for token, draft in list(self._drafts.items()):
                         if draft["kind"] == "material" and "result" not in draft:

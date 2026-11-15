@@ -371,11 +371,17 @@
               <select class="input" id="t-action-source">
                 <option value="daily">日常动作（特写库）</option>
                 <option value="event">事件动作（事件素材）</option>
+                <option value="meal">吃饭（菜品库）</option>
               </select>
             </div>
             <div class="field">
               <label class="field-label" for="t-closeup">动作 / 特写</label>
               <select class="input" id="t-closeup"></select>
+            </div>
+            <div class="field" id="t-meal-field" hidden>
+              <label class="field-label" for="t-meal">菜品</label>
+              <select class="input" id="t-meal"></select>
+              <div class="field-hint">菜品取自「添加素材 → 菜品」，生成时会把菜、主食和餐具一起写进画面。</div>
             </div>
           </div>
           <div class="field" id="t-event-pick" hidden>
@@ -438,6 +444,7 @@
               <option value="costume">服装（costume）</option>
               <option value="closeup">特写（closeup）</option>
               <option value="interaction">互动（interaction）</option>
+              <option value="meal">菜品（meal）</option>
             </select>
           </div>
           <div class="field">
@@ -729,7 +736,8 @@
   var FORMAT_HINTS = {
     costume: "服装草稿必须是单行：名称 | 别名（逗号分隔，可空） | 服装描述 —— 用 | 分成三段。",
     closeup: "特写草稿必须是单行构图描述（机位、动作、光线都可以写进去）。",
-    interaction: "互动草稿必须是单行，并以「摸摸：」或「捏捏：」开头。"
+    interaction: "互动草稿必须是单行，并以「摸摸：」或「捏捏：」开头。",
+    meal: "菜品草稿必须是单行：「菜名 | 约100字描述」，只写菜、主食、餐具和桌面，不写人物。"
   };
 
   /* 引擎约定：周一 = 0 … 周日 = 6 */
@@ -749,8 +757,8 @@
   var state = {
     loaded: false,
     revision: 0,
-    materials: { costume: [], closeup: [], interaction: [] },
-    materialRevisions: { costume: "", closeup: "", interaction: "" },
+    materials: { costume: [], closeup: [], interaction: [], meal: [] },
+    materialRevisions: { costume: "", closeup: "", interaction: "", meal: "" },
     materialQuery: "",
     worldSetup: null,
     cities: [],
@@ -1583,13 +1591,14 @@
     return {
       costume: materialEntries(raw.costume),
       closeup: materialEntries(raw.closeup),
-      interaction: materialEntries(raw.interaction)
+      interaction: materialEntries(raw.interaction),
+      meal: materialEntries(raw.meal)
     };
   }
 
   function normalizeMaterialRevisions(raw) {
     raw = raw && typeof raw === "object" ? raw : {};
-    var out = { costume: "", closeup: "", interaction: "" };
+    var out = { costume: "", closeup: "", interaction: "", meal: "" };
     Object.keys(out).forEach(function (kind) {
       var snapshot = raw[kind];
       out[kind] = snapshot && typeof snapshot === "object" && snapshot.revision
@@ -1601,6 +1610,7 @@
   function materialLabel(kind, entry) {
     var text = str(entry && entry.text);
     if (kind === "costume") return str(entry && entry.name) || truncate(text, 40);
+    if (kind === "meal") return str(entry && entry.name) || truncate(text, 40);
     if (kind === "interaction") {
       var action = str(entry && entry.action);
       if (action && text.indexOf(action) === 0) return truncate(text, 40);
@@ -3453,7 +3463,12 @@
       state.testEventCostume = index >= 0 && outfits[index]
         ? { name: outfits[index].name, desc: outfits[index].desc } : null;
     }
-    if (state.testActionSource === "daily") {
+    var mealField = $("#t-meal-field");
+    if (mealField) mealField.hidden = state.testActionSource !== "meal";
+    if (state.testActionSource === "meal") {
+      fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
+      state.testEventActions = [];
+    } else if (state.testActionSource === "daily") {
       fillMaterialSelect(closeupSelect, state.materials.closeup, "closeup", preserve);
       state.testEventActions = [];
     } else {
@@ -3501,7 +3516,10 @@
     } else if (!str(state.testEventCostume.desc).trim()) {
       reasons.push("事件服装缺少描述，请在素材库里补全这条服装");
     }
-    if (state.testActionSource === "daily") {
+    if (state.testActionSource === "meal") {
+      if (!(state.materials.meal || []).length) reasons.push("素材库没有菜品（meal）");
+      else if (!$("#t-meal") || $("#t-meal").value === "") reasons.push("还没有选择菜品");
+    } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
     } else if (!testActionValue()) {
@@ -3604,9 +3622,13 @@
       ? "服装：事件「" + str(payload.event_name || payload.event_id) + "」/ " + str(payload.costume_name)
       : "服装：日常 #" + str(payload.costume_id));
     var actionName = payload.action_source === "event" ? testEventActionName(payload.event_action) : "";
-    lines.push(payload.action_source === "event"
-      ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
-      : "动作：日常特写 #" + str(payload.closeup_id));
+    if (payload.action_source === "meal") {
+      lines.push("动作：吃饭 / 菜品「" + str(payload.meal_name) + "」");
+    } else {
+      lines.push(payload.action_source === "event"
+        ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
+        : "动作：日常特写 #" + str(payload.closeup_id));
+    }
     if (result && result.job_id) lines.push("job：" + result.job_id);
     lines.push("时间：" + new Date().toLocaleString());
     meta.textContent = lines.join("\n");
@@ -3894,7 +3916,16 @@
       costumeLine = "服装：事件「" + str((testEvent() || {}).name) + "」/ " + costume.name;
     }
     var actionLine;
-    if (state.testActionSource === "daily") {
+    if (state.testActionSource === "meal") {
+      var mealId = selectedMaterialId($("#t-meal"));
+      if (mealId === null) { toast("请选择菜品", "err"); return; }
+      var mealSelect = $("#t-meal");
+      var mealIndex = mealSelect ? mealSelect.selectedIndex : -1;
+      var mealEntry = mealIndex >= 0 ? (state.materials.meal || [])[mealIndex] : null;
+      payload.meal_id = mealId;
+      payload.meal_name = str(mealEntry && mealEntry.name);
+      actionLine = "动作：吃饭 / 菜品「" + (payload.meal_name || ("#" + mealId)) + "」";
+    } else if (state.testActionSource === "daily") {
       var closeupId = selectedMaterialId($("#t-closeup"));
       if (closeupId === null) { toast("请选择日常特写", "err"); return; }
       payload.closeup_id = closeupId;
@@ -4034,7 +4065,8 @@
   var MATERIAL_EDIT_HINT = {
     costume: "格式：名称 | 别名1,别名2 | 服装描述（别名可为空，但竖线要保留两处）",
     closeup: "一行一条特写提示词；编号保持不变，其它条目编号也不受影响。",
-    interaction: "一行一条互动提示词；一般以「摸摸」「捏捏」开头。"
+    interaction: "一行一条互动提示词；一般以「摸摸」「捏捏」开头。",
+    meal: "一行一条菜品：「菜名 | 描述」，描述约100字，写清菜、主食和餐具。"
   };
 
   function applyMaterialWriteResult(kind, result) {
@@ -4047,6 +4079,7 @@
     renderMaterialPanel();
     fillMaterialSelect($("#t-costume"), state.materials.costume, "costume");
     fillMaterialSelect($("#t-closeup"), state.materials.closeup, "closeup");
+    fillMaterialSelect($("#t-meal"), state.materials.meal, "meal");
     fillMaterialSelect($("#try-closeup"), state.materials.closeup, "closeup", true);
     renderEvents();
   }
@@ -6409,7 +6442,8 @@
     });
     var actionSource = $("#t-action-source");
     if (actionSource) actionSource.addEventListener("change", function () {
-      state.testActionSource = actionSource.value === "event" ? "event" : "daily";
+      state.testActionSource = actionSource.value === "event" ? "event"
+        : actionSource.value === "meal" ? "meal" : "daily";
       if (state.testActionSource === "daily") {
         state.testAction = "";
         var actionBox = $("#t-action");

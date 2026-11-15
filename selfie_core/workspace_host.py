@@ -12,11 +12,7 @@ from pathlib import Path
 from .storage import JsonStateStore
 from .scene_context import local_datetime
 
-try:  # AstrBot runtime
-    from astrbot.api import logger
-except ImportError:  # offline unit tests
-    import logging
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 
 class WorkspaceHostMixin:
@@ -154,7 +150,10 @@ class WorkspaceHostMixin:
         paths = {kind: settings[key] for kind, key in (
             ('costume', 'costume_file'), ('closeup', 'closeup_prompt_file'),
             ('interaction', 'interact_prompt_file')) if settings.get(key)}
-        store = MaterialStore(self.plugin_dir, paths=paths)
+        root = str(getattr(self, 'data_dir', '') or getattr(self, 'plugin_dir', ''))
+        store = MaterialStore(root, paths=paths,
+                              backup_dir=os.path.join(root, 'material_backups') if root else None,
+                              fallback_root=self.plugin_dir)
         if costume_override is None:
             costume = next((x for x in store.list('costume') if x['id'] == int(payload['costume_id'])), None)
         else:

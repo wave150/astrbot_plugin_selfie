@@ -50,7 +50,7 @@ try:  # AstrBot package loader
     from .selfie_core.workspace_host import WorkspaceHostMixin
     from .selfie_core.language import character_text
     from .selfie_core.scene_context import scene_context_text, local_datetime
-    from .selfie_core.materials import MaterialStore, parse_materials
+    from .selfie_core.materials import FILENAMES, MaterialStore, parse_materials, ensure_files
     from .selfie_core.living import photo_variation
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 except ImportError:  # direct local test import
@@ -71,7 +71,7 @@ except ImportError:  # direct local test import
     from selfie_core.workspace_host import WorkspaceHostMixin
     from selfie_core.language import character_text
     from selfie_core.scene_context import scene_context_text, local_datetime
-    from selfie_core.materials import MaterialStore, parse_materials
+    from selfie_core.materials import FILENAMES, MaterialStore, parse_materials, ensure_files
     from selfie_core.living import photo_variation
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 
@@ -96,6 +96,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         self.data_dir = data_dir
         self.state_path = os.path.join(data_dir, "state.json")
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        # 运行时素材库统一落在数据目录（升级不丢），插件目录里的同名文件只作只读默认值。
+        try:
+            ensure_files(self.data_dir, self.plugin_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[selfie] 复制默认素材到数据目录失败: {exc!r}")
         self.ref_path = os.path.join(self.plugin_dir, "assets", "ref.png")
         # 编辑模型专用：三视图里裁出来的竖版正面图（编辑模型会沿用参考图的画幅）
         self.ref_front_path = os.path.join(self.plugin_dir, "assets", "ref_front.png")
@@ -671,15 +676,47 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return removal
 
     # ---------------- 衣柜：外部 costumes.txt（热加载） ----------------
-    def _costumes_path(self) -> str:
-        raw = str(self._cfg("costume_file", "") or "").strip()
+    def _material_dir(self) -> str:
+        """素材库的运行时根目录：优先数据目录，没有就退回插件目录（老实例）。"""
+        data_dir = getattr(self, "data_dir", "")
+        return str(data_dir or getattr(self, "plugin_dir", ""))
+
+    def _resolve_material_path(self, key: str, filename: str) -> str:
+        """配置相对路径按数据目录解析；运行时文件缺失时退回插件目录的只读默认值。"""
+        root = self._material_dir()
+        raw = str(self._cfg(key, "") or "").strip()
         if raw:
-            path = raw if os.path.isabs(raw) else os.path.join(self.plugin_dir, raw)
+            path = raw if os.path.isabs(raw) else os.path.join(root, raw)
             if os.path.exists(path):
                 return path
-            logger.warning(f"[selfie] costume_file 指的 {path} 不存在，改用插件目录")
-        cand = os.path.join(self.plugin_dir, COSTUME_FILENAME)
-        return cand if os.path.exists(cand) else ""
+            logger.warning(f"[selfie] {key} 指的 {path} 不存在，改用默认素材文件")
+        for cand in (os.path.join(root, filename),
+                     os.path.join(getattr(self, "plugin_dir", ""), filename)):
+            if cand and os.path.exists(cand):
+                return cand
+        return ""
+
+    def _costumes_path(self) -> str:
+        return self._resolve_material_path("costume_file", COSTUME_FILENAME)
+
+    def _meal_library(self) -> dict:
+        """菜品素材库：菜名 → {name, description}，按 mtime 热加载。"""
+        root = self._material_dir()
+        path = os.path.join(root, FILENAMES["meal"])
+        if not os.path.exists(path):
+            path = os.path.join(getattr(self, "plugin_dir", ""), FILENAMES["meal"])
+        try:
+            mtime = os.path.getmtime(path)
+            cache = getattr(self, "_meal_cache", None)
+            if cache and cache[0] == path and cache[1] == mtime:
+                return cache[2]
+            with open(path, encoding="utf-8-sig") as fh:
+                entries = parse_materials("meal", fh.read())
+            library = {entry["name"]: entry for entry in entries}
+            self._meal_cache = (path, mtime, library)
+            return library
+        except Exception:
+            return {}
 
     def _costume_tables(self) -> tuple[dict, dict]:
         """读外部衣柜，返回 (名字->描述, 别名->名字)。
@@ -828,7 +865,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             return False
         try:
             backup_dir = os.path.join(self.data_dir, "material_backups") if getattr(self, "data_dir", None) else None
-            store = MaterialStore(self.plugin_dir, {"costume": os.path.abspath(path)}, backup_dir=backup_dir)
+            store = MaterialStore(self._material_dir(), {"costume": os.path.abspath(path)},
+                                  backup_dir=backup_dir, fallback_root=self.plugin_dir)
             draft = store.create_draft("costume", f"{name} | {alias_field} | {desc}")
             entry = store.confirm_draft(draft["token"])
             self._last_appended_costume_line = f"{entry['id']}：{entry['text']}"
@@ -1114,18 +1152,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return "".join(note for key, note in SCENE_HARD_NOTES if key and key in blob)
 
     def _closeup_prompt_path(self) -> str:
-        """特写提示词 txt 路径：配置 > 插件 assets > 桌面上那份。
+        """特写提示词 txt 路径：配置 > 数据目录 > 插件 assets > 桌面上那份。
 
         配置里写的路径如果不存在，不再直接返回它（那样会打开失败、悄悄掉回内置 8 条），
         而是记一条 WARNING 继续往后找，保证「文件被挪走/删掉」时还有别的备份顶上。
         """
+        root = self._material_dir()
         raw = str(self._cfg("closeup_prompt_file", "") or "").strip()
         if raw:
-            p = raw if os.path.isabs(raw) else os.path.join(self.plugin_dir, raw)
+            p = raw if os.path.isabs(raw) else os.path.join(root, raw)
             if os.path.exists(p):
                 return p
-            logger.warning(f"[selfie] closeup_prompt_file 指的 {p} 不存在，继续找 assets / 桌面")
+            logger.warning(f"[selfie] closeup_prompt_file 指的 {p} 不存在，继续找数据目录 / assets / 桌面")
         for cand in (
+            os.path.join(root, "closeup_prompts.txt"),
             os.path.join(self.plugin_dir, "closeup_prompts.txt"),
             os.path.join(self.plugin_dir, "assets", "closeup_prompts.txt"),
             *CLOSEUP_PROMPT_FILE_CANDIDATES,
@@ -1280,17 +1320,19 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
     # ---------------- 互动：摸摸 / 捏捏 的提示词 ----------------
     def _interact_prompt_path(self) -> str:
-        """配置路径优先，其次 interaction.txt，最后兼容旧中文文件名。"""
+        """配置路径优先，其次数据目录，最后插件目录（兼容旧中文文件名）。"""
+        root = self._material_dir()
         raw = str(self._cfg("interact_prompt_file", "") or "").strip()
         if raw:
-            p = raw if os.path.isabs(raw) else os.path.join(self.plugin_dir, raw)
+            p = raw if os.path.isabs(raw) else os.path.join(root, raw)
             if os.path.exists(p):
                 return p
-            logger.warning(f"[selfie] interact_prompt_file 指的 {p} 不存在，改用插件目录")
-        for filename in (INTERACT_PROMPT_FILENAME, "小汉堡互动.txt"):
-            cand = os.path.join(self.plugin_dir, filename)
-            if os.path.exists(cand):
-                return cand
+            logger.warning(f"[selfie] interact_prompt_file 指的 {p} 不存在，改用默认素材文件")
+        for base in (root, getattr(self, "plugin_dir", "")):
+            for filename in (INTERACT_PROMPT_FILENAME, "小汉堡互动.txt"):
+                cand = os.path.join(base, filename)
+                if os.path.exists(cand):
+                    return cand
         return ""
 
     def _interact_prompts(self) -> list:
@@ -2812,6 +2854,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """
         profile = self._profile()
         # 吃饭 / 做饭这一张：换成专门的机位和动作，菜和主食必须入画。
+        if isinstance(scene, dict) and str(scene.get("living_phase") or "") in ("cook", "lunch", "lunch_out"):
+            dish = str(scene.get("meal") or "").strip()
+            info = self._meal_library().get(dish) if dish else None
+            if info and info.get("description"):
+                scene = dict(scene)
+                scene["meal_desc"] = str(info["description"])
         meal = meal_photo(scene, self.rng)
         if profile.is_custom:
             prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene), style=self._style(style))
@@ -3469,7 +3517,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
         try:
             backup_dir = os.path.join(self.data_dir, "material_backups") if getattr(self, "data_dir", None) else None
-            store = MaterialStore(self.plugin_dir, {"closeup": os.path.abspath(p)}, backup_dir=backup_dir)
+            store = MaterialStore(self._material_dir(), {"closeup": os.path.abspath(p)},
+                                  backup_dir=backup_dir, fallback_root=self.plugin_dir)
             draft = store.create_draft("closeup", text)
             entry = store.confirm_draft(draft["token"])
             num = entry["id"]

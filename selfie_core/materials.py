@@ -19,9 +19,9 @@ import threading
 import uuid
 
 
-KINDS = ("costume", "closeup", "interaction")
+KINDS = ("costume", "closeup", "interaction", "meal")
 FILENAMES = {"costume": "costumes.txt", "closeup": "closeup_prompts.txt",
-             "interaction": "interaction.txt"}
+             "interaction": "interaction.txt", "meal": "meals.txt"}
 _NUMBER = re.compile(r"^\s*([0-9]+)\s*[：:.、)）]\s*")
 
 
@@ -39,7 +39,7 @@ class MaterialDuplicate(MaterialError):
 
 def _kind(kind):
     if kind not in KINDS:
-        raise MaterialError("kind must be costume, closeup or interaction")
+        raise MaterialError("kind must be costume, closeup, interaction or meal")
     return kind
 
 
@@ -55,6 +55,11 @@ def _entry(kind, ident, text):
         entry.update(name=parts[0], description=parts[-1], aliases=[
             a.strip() for a in re.split(r"[,，、/]+", parts[1] if len(parts) == 3 else "")
             if a.strip()])
+    elif kind == "meal":
+        parts = [part.strip() for part in text.split("|")]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise MaterialError("meal requires name | description")
+        entry.update(name=parts[0], description=parts[1])
     elif kind == "interaction":
         match = re.match(r"^(摸摸|捏捏)[：:｜| ]\s*", text)
         entry["action"] = match[1] if match else ""
@@ -115,6 +120,35 @@ def _decode(data):
     return data.decode("utf-8") if data is not None else ""
 
 
+def ensure_files(root, default_root, kinds=KINDS):
+    """首次运行时把随包默认素材复制到数据目录；已存在的不覆盖。
+
+    运行时读写必须落在数据目录（升级/迁移不会丢），插件目录只当只读默认值。
+    返回实际复制出来的文件名列表。
+    """
+    root, default_root = Path(root), Path(default_root)
+    copied = []
+    for kind in kinds:
+        target = root / FILENAMES[kind]
+        if target.exists():
+            continue
+        source = default_root / FILENAMES[kind]
+        if not source.exists() and kind == "interaction":
+            source = default_root / "小汉堡互动.txt"
+        if not source.exists():
+            continue
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            data = source.read_bytes()
+            temporary = target.with_name(target.name + ".tmp")
+            temporary.write_bytes(data)
+            os.replace(temporary, target)
+            copied.append(FILENAMES[kind])
+        except OSError:
+            continue
+    return copied
+
+
 def _numbered(kind, data):
     text = _decode(data)
     rows = _rows(kind, text)
@@ -131,8 +165,9 @@ def _numbered(kind, data):
 class MaterialStore:
     """paths optionally maps kinds to configured absolute or root-relative paths."""
 
-    def __init__(self, root, paths=None, *, backup_dir=None):
+    def __init__(self, root, paths=None, *, backup_dir=None, fallback_root=None):
         self.root = Path(root)
+        self.fallback_root = Path(fallback_root) if fallback_root else None
         self.backup_dir = Path(backup_dir) if backup_dir else None
         self.paths = {}
         for kind in KINDS:
@@ -143,9 +178,18 @@ class MaterialStore:
 
     def _source(self, kind):
         path = self.paths[_kind(kind)]
-        legacy = self.root / "小汉堡互动.txt"
-        if kind == "interaction" and not path.exists() and legacy.exists():
-            return legacy
+        legacy_names = ("小汉堡互动.txt",) if kind == "interaction" else ()
+        for name in legacy_names:
+            if not path.exists() and (self.root / name).exists():
+                return self.root / name
+        if not path.exists() and self.fallback_root is not None:
+            # 插件目录里的文件只是随包默认值；运行时读写始终落在数据目录。
+            candidate = self.fallback_root / path.name
+            if candidate.exists():
+                return candidate
+            for name in legacy_names:
+                if (self.fallback_root / name).exists():
+                    return self.fallback_root / name
         return path
 
     def snapshot(self, kind):
@@ -159,6 +203,7 @@ class MaterialStore:
 
     @contextmanager
     def _locked(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
         lock = path.with_name(path.name + ".lock")
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -172,6 +217,7 @@ class MaterialStore:
 
     @staticmethod
     def _atomic(path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
         try:
             with os.fdopen(fd, "wb") as stream:
@@ -227,6 +273,12 @@ class MaterialStore:
             raise MaterialError("draft must not contain a comment or numeric ID prefix")
         if kind == "costume" and len(text.split("|")) != 3:
             raise MaterialError("costume draft requires name | aliases | description")
+        if kind == "meal":
+            parts = [part.strip() for part in text.split("|")]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise MaterialError("meal draft requires name | description")
+            if len(parts[1]) < 20:
+                raise MaterialError("meal description is too short; describe the dish and tableware")
         return _entry(kind, 0, text)
 
     def create_draft(self, kind, text):

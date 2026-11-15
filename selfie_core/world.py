@@ -863,6 +863,12 @@ class WorldMixin:
         hour_key = self.clock.strftime('%Y-%m-%d %H', self._world_localtime(now))
         if str(previous.get('hour_key') or '') != hour_key:
             return False
+        # 00:30 是「关灯睡觉」的分界点，落在同一个钟点里也必须换一次场景。
+        if previous.get('type') in ('bed', 'bed_sleepy'):
+            expected = ('bed_sleepy' if self._bed_subtype(dt.hour, dt.minute) == 'bed_sleepy'
+                        else 'bed')
+            if previous.get('type') != expected:
+                return False
         pending = self.state.get('pending_target')
         if isinstance(pending, dict) and pending.get('arrive_at'):
             try:
