@@ -160,6 +160,15 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 5. 若旧版确实无法读取新 runtime，先保留最新副本，再单独评估并恢复必要运行数据。**恢复完整旧 runtime 会失去备份之后的活动与新照片记录**；这是数据回退，不是无损操作。custom namespace 在旧版中可能不可见，保留它们等待迁移，不要删除。
 6. 核查代码、配置与运行目录对应关系后启动，先检查日志/状态读取，不要立即触发付费生图或空间发布。发现不兼容则停止并从刚保存的当前副本恢复，另行处理迁移。
 
+## v1.5.16 吃饭 / 做饭提示词（selfie_core/meal.py）
+
+- 新增纯函数模块 `selfie_core/meal.py`：`meal_photo(scene, rng)` 在 `living_phase` 为 `cook` / `lunch` / `lunch_out` 时返回机位、动作和「饭菜必须入画」的补充要求；`meal_photo_prompt()` 供自定义角色路径使用整段文字版。
+- 5 套吃饭机位 + 5 套做饭机位，全部与菜品解耦，换菜单不用改提示词；菜名取 `scene['meal']`，缺失时从活动文字里解析。
+- 主食搭配 `STAPLE_RULES`：炒菜 / 炖菜配米饭和筷子；面 / 粉 / 馄饨本身是主食可干吃；饺子配醋、粥配小菜、三明治配饮料、汉堡炸鸡配可乐薯条。
+- `living.py`：午餐场景从「餐厅」改为「厨房」，`meal_table=True` 时在 `_emit` 里把「厨房靠窗的小餐桌 + 摆好的饭菜」补进 `desc`；`MEALS` 从 50 道扩到 53 道（新增汉堡套餐 / 炸鸡配可乐 / 披萨）。
+- `main._selfie_prompt()`：命中吃饭 / 做饭时替换默认「伸长手臂自拍」姿势，改用 meal 的构图与动作，并在场景描述后追加 `meal['tail']` 的硬性要求；自定义角色走 `meal_text()` 追加。
+- 测试：新增 `tests/test_meal.py` 13 项（分类、搭配、5 套模板、每道菜格式化、外食 / 做饭 / 非吃饭阶段），`test_living` 更新菜单数与午餐房间断言；总计 390 项通过。
+
 ## v1.5.15 旧世界导入的「|区|城市」后缀修复与清理
 
 - 解析修复：[legacy_world.py](<selfie_core/legacy_world.py>) 的 `read_places()` 不再把第 5、6 列拼进描述：≥6 列时 `place = "|".join(parts[3:-2])`、`district/city = parts[-2:]`；5 列时最后一个是区、城市用 `default_city`；4 列时没有区/城市。描述里真的含 `|` 的行会保留在描述中。旧实现 `"|".join(parts[3:])` 会把「…步道|未央区|西安」整体写进 `place`，进而进生图提示词。

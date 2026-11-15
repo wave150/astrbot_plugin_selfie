@@ -52,6 +52,7 @@ try:  # AstrBot package loader
     from .selfie_core.scene_context import scene_context_text, local_datetime
     from .selfie_core.materials import MaterialStore, parse_materials
     from .selfie_core.living import photo_variation
+    from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 except ImportError:  # direct local test import
     from selfie_core.defaults import *
     from selfie_core.defaults import _COSTUME_EXCLUDE, _COSTUME_RE, _COSTUME_HINT_PAT
@@ -72,6 +73,7 @@ except ImportError:  # direct local test import
     from selfie_core.scene_context import scene_context_text, local_datetime
     from selfie_core.materials import MaterialStore, parse_materials
     from selfie_core.living import photo_variation
+    from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 
 
 class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
@@ -2809,8 +2811,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         - 主人要求摘帽子/脱外套时，用 edit_note 明确让模型把参考图里的物件去掉
         """
         profile = self._profile()
+        # 吃饭 / 做饭这一张：换成专门的机位和动作，菜和主食必须入画。
+        meal = meal_photo(scene, self.rng)
         if profile.is_custom:
-            return build_custom_prompt(profile, scene, look or self._resolve_look(scene), style=self._style(style))
+            prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene), style=self._style(style))
+            if meal:
+                prompt += "\n这一张的动作与画面要求：" + meal_text(meal)
+            return prompt
         use_ref = self._use_reference(model, style)
         style = self._style(style)
         style_block = STYLE_BLOCK[style]
@@ -2874,12 +2881,17 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "不要画成亮着蓝紫色氛围灯、屏幕亮着或者开着顶灯。"
             )
         else:
-            framing = "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）："
-            pose = (
-                "镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
-                "手掌在画面外，画面里只有这条手臂；"
-                f"另一只手{gesture}；"
-            )
+            if meal:
+                # 吃饭 / 做饭：用专门的构图和动作，替掉「伸长手臂自拍」的默认姿势。
+                framing = meal["framing"]
+                pose = meal["pose"]
+            else:
+                framing = "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）："
+                pose = (
+                    "镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
+                    "手掌在画面外，画面里只有这条手臂；"
+                    f"另一只手{gesture}；"
+                )
             face_line = f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。"
         # 夜间睡衣的氛围（光线/湿度/姿态/神态）单独补一句：张力靠这个撑，而不是靠穿得少
         mood = str(look.get("mood") or "").strip()
@@ -2930,6 +2942,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + scene_context_text(scene)
             + f"场景：{scene.get('desc', '')}，背景是真实世界的环境，"
             "有清晰的环境细节、真实材质和自然光影，背景轻微虚化。"
+            + (meal["tail"] if meal else "")
             + light_line
             + (self._tongue_line() if TONGUE_PAT.search(head) else "")
             + STYLE_QUALITY[style]

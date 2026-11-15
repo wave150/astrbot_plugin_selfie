@@ -27,7 +27,11 @@ MEALS = (
     '鲜肉水饺', '韭菜鸡蛋饺子', '鲜虾馄饨', '鸡蛋三明治', '金枪鱼三明治',
     '照烧鸡腿饭', '香煎三文鱼', '肉末蒸蛋', '清蒸南瓜', '香菇青菜',
     '蒜苔炒肉', '芹菜炒香干', '山药炒木耳', '白菜炖粉条', '豆角焖面',
+    '汉堡套餐', '炸鸡配可乐', '披萨',
 )
+
+# 在家吃饭时，把「厨房里的小餐桌」补进场景描述：家里的厨房本来没写餐桌。
+_MEAL_TABLE_HINT = '；厨房靠窗的位置摆着一张原木小餐桌，桌上已经摆好刚做好的饭菜和碗筷'
 _CONDITIONS = {'weekdays', 'cities', 'dates', 'date_from', 'date_to'}
 
 
@@ -323,6 +327,9 @@ class LivingEngine:
                 scene['desc'] = room
             elif isinstance(room, dict) and room.get('desc'):
                 scene['desc'] = str(room['desc'])
+        if scene.get('meal_table') and isinstance(scene.get('desc'), str) and scene['desc'].strip():
+            desc = scene['desc'].rstrip()
+            scene['desc'] = (desc[:-1] if desc.endswith('。') else desc) + _MEAL_TABLE_HINT + '。'
         scene['can_change_clothes'] = bool(scene.get('home') or scene.get('type') == 'lodging')
         scene['weather'] = deepcopy(weather or {})
         self.record(now, scene)
@@ -487,12 +494,15 @@ class LivingEngine:
             if now.hour == 11:
                 room, action, phase = '厨房', f'准备午餐，做{meal}', 'cook'
             elif now.hour == 12:
-                room, action, phase = '餐厅', f'吃午餐：{meal}', 'lunch'
+                room, action, phase = '厨房', f'在厨房餐桌吃午餐：{meal}', 'lunch'
             else:
                 room, action, phase = '客厅', '在家休息，下午两点后再出门', 'home'
             scene = self._home(home_city, home_district, room, action, phase)
             if phase in ('cook', 'lunch'):
                 scene['meal'] = meal
+            if phase == 'lunch':
+                # 吃自己做的饭：就坐在自家厨房的小餐桌前，餐桌上摆着刚做好的饭菜。
+                scene['meal_table'] = True
             return self._emit(now, scene, weather)
         if now.hour == 12:
             # Eating nearby is an actual observation, not a retroactive claim.
