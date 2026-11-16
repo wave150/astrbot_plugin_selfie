@@ -1,7 +1,7 @@
-"""她的一天 · 角色生活自拍（单实例单角色）。
+"""真实世界生活相机 · ta的一天（单实例单角色）。
 
-不是生图插件：她住在一座真实城市里，有家、天气、每天的日程和临时事件，
-会按时间出门上班、吃饭、换装、睡觉，也会在自己生活的现场举起手机自拍。
+角色住在一座真实城市里，有家、天气、每天的日程和临时事件，
+会按时间出门上班、吃饭、换装、睡觉，也在自己生活的现场拍自拍、特写和互动照。
 
 默认预设仍兼容旧角色：一个二次元少女；插件不内置任何城市数据
 - 自拍：第一人称手机前置摄像头视角（画面里不出现手机），白天在外、晚上在床上穿睡衣
@@ -4317,6 +4317,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """拟人化拍照对话开关（默认开）：图单独发，她用自己语气回应和补一句。"""
         return bool(self._cfg("natural_chat", True))
 
+    def _shutter_mark_enabled(self) -> bool:
+        """接单第一句是否带（咔嚓）（默认开）。"""
+        return bool(self._cfg("shutter_mark", True))
+
+    def _astrbot_segmented_settings(self, event=None) -> dict:
+        """AstrBot 全局「分段回复」配置（platform_settings.segmented_reply）。"""
+        try:
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            config = self.context.get_config(umo or None)
+            settings = (config.get("platform_settings") or {}).get("segmented_reply") or {}
+            return settings if isinstance(settings, dict) else {}
+        except Exception:
+            return {}
+
     async def _conversation_snapshot(self, event):
         """(当前会话最近的聊天行, 对话的 persona_id)；拿不到就空，不影响出图。"""
         umo = str(getattr(event, "unified_msg_origin", "") or "")
@@ -4406,7 +4420,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             style_override, self.ACK_FALLBACK_DEFAULT
         )
         if not bool(self._cfg("ack_llm", True)):
-            return dialogue.with_kacha(self.rng.choice(pool))
+            return dialogue.finalize_reply(
+                self.rng.choice(pool), kacha=self._shutter_mark_enabled()
+            )
         history, conversation_persona = await self._conversation_snapshot(event)
         try:
             scene = await self._get_scene()
@@ -4438,12 +4454,15 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             action_line=action_line,
             detail="".join([detail] + hints),
             history=history,
+            mark=self._shutter_mark_enabled(),
         )
         text = dialogue.usable_reply(await self._llm_text(system, prompt),
                                      keep_lines=True)
         if text:
-            return dialogue.with_kacha(text)
-        return dialogue.with_kacha(self.rng.choice(pool))
+            return dialogue.finalize_reply(text, kacha=self._shutter_mark_enabled())
+        return dialogue.finalize_reply(
+            self.rng.choice(pool), kacha=self._shutter_mark_enabled()
+        )
 
     async def _ack_text(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
@@ -4532,10 +4551,24 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             logger.warning(f"[selfie] 确认语生成失败，用内置短句: {e!r}")
         return self.rng.choice(fallback_pool) + "🤳"
 
-    async def _send_reply(self, event, text: str) -> None:
-        """按句号 / 换行拆成多条消息发出去（句号不出现在聊天里）。"""
-        for segment in dialogue.split_reply(text):
+    async def _send_reply(self, event, text: str) -> list[str]:
+        """按 AstrBot「分段回复」的配置把回复拆成多条发出去。
+
+        AstrBot 官方的分段回复只在它自己的回复管线里生效；插件里的接单话和
+        配文是主动发送的，所以这里读同一份设置（enable / split_mode / regex /
+        split_words / words_count_threshold / content_cleanup_rule），再用同样的
+        间隔逐段发送，效果和正常对话回复一致。句号不会出现在聊天里。
+        """
+        settings = self._astrbot_segmented_settings(event)
+        segments = dialogue.split_like_astrbot(text, settings) or (
+            [str(text).strip()] if str(text or "").strip() else []
+        )
+        interval = dialogue.segmented_interval(settings)
+        for index, segment in enumerate(segments):
+            if index and interval:
+                await asyncio.sleep(self.rng.uniform(interval[0], interval[1]))
             await event.send(MessageChain([Plain(segment)]))
+        return segments
 
     async def _send_ack(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
@@ -4588,10 +4621,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             text = ""
         if not text:
             text = fallback_caption
-        segments = dialogue.split_reply(text) or [text]
-        for segment in segments:
-            await event.send(MessageChain([Plain(segment)]))
+        segments = await self._send_reply(event, text)
         # 存档保留完整意思；分段之间用逗号接起来，不带句号。
+        if not segments:
+            return text
         return "，".join(segments) if len(segments) > 1 else segments[0]
 
     @staticmethod

@@ -165,12 +165,14 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 - `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
 - `test_main_boundaries.test_photo_action_priority_event_over_sleep_meal_then_default` 同步覆盖四种来源与顺序；总计 419 项通过。
 
-## v1.6.0 分段回复与改名
+## v1.6.0 分段回复（跟随 AstrBot 配置）与改名
 
-- `selfie_core/dialogue.split_reply(text, max_segments=4)`：按句号 / 换行把回复拆成多条消息，句号作为分段符被移除；`！？…` 是语气不拆；超过 4 段时用逗号并进最后一段。返回值只依赖文本，与框架无关。
-- `main._send_reply(event, text)`：统一发送入口，逐段 `event.send`；自拍 / 特写 / 互动 / cos / 随机衣服特写的接单语都改走它，`_deliver_photo()` 的配文也逐段发送，存档配文用逗号连接各段。
-- 只改展示层：`metadata.yaml` 的 `display_name` / `short_desc` / `desc` / `tags` 换成「她的一天 · 角色生活自拍」，包名 `name` 不动（插件市场 ID `wave150/astrbot_plugin_selfie` 不变）。
-- 测试：`test_dialogue` 新增分段/句号清理/超段合并用例，`test_main_boundaries` 新增 `_send_reply` 与多段配文发送用例；总计 458 项通过。
+- `selfie_core/dialogue.split_reply(text, max_segments=4)`：基础切分，按句号 / 换行拆成多条消息，句号作为分段符被移除；`！？…` 是语气不拆；超过 4 段时用逗号并进最后一段。
+- `selfie_core/dialogue.split_like_astrbot(text, settings)`：镜像 AstrBot `platform_settings.segmented_reply` 的拆分规则——`enable` / `split_mode`（regex / words）/ `regex` / `split_words` / `words_count_threshold` / `content_cleanup_rule`；AstrBot 关闭分段时退回 `split_reply()`。无论哪边配置，最终都再按句号兜底切一次，保证句号不出现在聊天文本里。
+- `selfie_core/dialogue.segmented_interval(settings)`：解析 AstrBot 的分段间隔（`interval`），单条最多 sleep 2 秒；`finalize_reply(text, kacha=...)`：控制接单第一句的（咔嚓），关掉时只清理拟声词、保留分句。
+- `main._send_reply(event, text)`：统一发送入口，用 `_astrbot_segmented_settings(event)` 读 AstrBot 配置后逐段发送（段间 sleep）；自拍 / 特写 / 互动 / cos / 随机衣服特写的接单语都改走它，`_deliver_photo()` 的配文也逐段发送，存档配文用逗号连接各段。配置项 `shutter_mark`（默认 true）控制接单（咔嚓），`ack_prompts(mark=...)` 同步调整提示词。
+- 只改展示层：`metadata.yaml` 的 `display_name` / `short_desc` / `desc` / `tags` 换成「真实世界生活相机 · ta的一天」，包名 `name` 不动（插件市场 ID `wave150/astrbot_plugin_selfie` 不变）。
+- 测试：`test_dialogue` 新增分段规则 / AstrBot 配置 / 间隔解析 /（咔嚓）开关 / 句号清理用例，`test_main_boundaries` 新增 `_send_reply`、`_shutter_mark_enabled`、无（咔嚓）接单、多段配文发送用例；总计 471 项通过。
 
 ## v1.5.21 拟人化拍照对话（措辞层独立）
 

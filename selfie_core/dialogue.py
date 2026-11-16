@@ -108,6 +108,22 @@ def with_kacha(text):
     return result
 
 
+def finalize_reply(text, *, kacha=True):
+    """Normalise an acknowledgement, with or without the shutter marker.
+
+    ``kacha=False`` 对应配置里关掉「（咔嚓）」：仍然清掉模型自己加的拟声词、
+    保留分句换行，让 ``split_like_astrbot()`` 继续按句分段发送。
+    """
+    if kacha:
+        return with_kacha(text)
+    value = _clean_text(text, keep_lines=True, limit=160)
+    for token in _SHUTTER_TOKENS:
+        value = value.replace(token, "")
+    lines = [_join_cjk_spaces(line.strip(" ，,、"))
+             for line in value.split("\n") if line.strip()]
+    return "\n".join(lines)
+
+
 def split_reply(text, *, max_segments=4):
     """Split a chat reply into separate messages at 句号 / 换行.
 
@@ -128,6 +144,102 @@ def split_reply(text, *, max_segments=4):
         tail = "，".join(segments[max_segments - 1:])
         segments = head + [tail]
     return segments
+
+
+# AstrBot「分段回复」的默认正则（platform_settings.segmented_reply.regex）。
+_DEFAULT_SEG_REGEX = r".*?[。？！~…]+|.+$"
+
+
+def _split_by_words(text, words, max_segments):
+    """按分段词切开（和 AstrBot 的 words 模式一致：分段词本身不保留）。"""
+    words = [str(word) for word in (words or ["。", "？", "！", "~", "…"]) if word]
+    if not words:
+        return split_reply(text, max_segments=max_segments)
+    pattern = re.compile(
+        "(" + "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True)) + ")"
+    )
+    pieces = []
+    for chunk in text.split("\n"):
+        buffer = ""
+        for part in pattern.split(chunk):
+            if pattern.fullmatch(part):
+                if buffer.strip():
+                    pieces.append(buffer)
+                buffer = ""
+            else:
+                buffer += part
+        if buffer.strip():
+            pieces.append(buffer)
+    if len(pieces) > max_segments:
+        pieces = pieces[:max_segments - 1] + ["，".join(pieces[max_segments - 1:])]
+    return pieces
+
+
+def split_like_astrbot(text, settings=None, *, max_segments=4):
+    """Split a reply the same way AstrBot's segmented-reply stage would.
+
+    ``settings`` 是 AstrBot 的 ``platform_settings.segmented_reply``：enable /
+    split_mode（regex|words）/ regex / split_words / words_count_threshold /
+    content_cleanup_rule。无论 AstrBot 怎么配置，这里都不会把句号发进聊天——
+    分段后再按句号兜底切一次，保证「句号处必须分开」。
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    value = _clean_text(text, keep_lines=True)
+    if not value:
+        return []
+    if not settings.get("enable", True):
+        return split_reply(value, max_segments=max_segments)
+    try:
+        threshold = int(settings.get("words_count_threshold") or 150)
+    except (TypeError, ValueError):
+        threshold = 150
+    # AstrBot 对超长消息不分段；这里仍然按句号切开，因为句号不能出现在聊天里。
+    if threshold > 0 and len(value) > threshold:
+        return split_reply(value, max_segments=max_segments)
+    if str(settings.get("split_mode") or "regex") == "words":
+        raw = _split_by_words(value, settings.get("split_words"), max_segments)
+    else:
+        regex = str(settings.get("regex") or _DEFAULT_SEG_REGEX)
+        try:
+            raw = re.findall(regex, value, re.DOTALL | re.MULTILINE)
+        except re.error:
+            raw = re.findall(_DEFAULT_SEG_REGEX, value, re.DOTALL | re.MULTILINE)
+    cleanup = str(settings.get("content_cleanup_rule") or "")
+    segments = []
+    for part in raw:
+        piece = str(part or "")
+        if cleanup:
+            try:
+                piece = re.sub(cleanup, "", piece)
+            except re.error:
+                pass
+        segments.extend(split_reply(piece, max_segments=max_segments))
+    if len(segments) > max_segments:
+        segments = segments[:max_segments - 1] + ["，".join(segments[max_segments - 1:])]
+    return segments
+
+
+def segmented_interval(settings=None):
+    """AstrBot 分段回复的间隔（秒），没开或解析失败返回 ()。
+
+    只在两条之间 sleep，且最多 2 秒，避免接单话等太久。
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    if not settings.get("enable", False):
+        return ()
+    raw = str(settings.get("interval") or "").replace(" ", "")
+    try:
+        values = [float(item) for item in raw.split(",") if item]
+    except ValueError:
+        values = []
+    if len(values) >= 2:
+        low, high = values[0], values[1]
+    elif len(values) == 1:
+        low = high = values[0]
+    else:
+        low, high = 1.5, 3.5
+    low, high = max(0.0, min(low, high)), max(0.0, max(low, high))
+    return (min(low, 2.0), min(high, 2.0))
 
 
 def usable_reply(text, *, min_len=4, max_len=90, keep_lines=False):
@@ -224,7 +336,7 @@ def history_lines(history, *, limit=8, width=80):
 
 
 def ack_prompts(*, persona, user_text, scene_line="", action_line="",
-                detail="", history=()):
+                detail="", history=(), mark=True):
     """Prompts for the pre-photo reply (order accepted, first sentence 咔嚓)."""
     system = (
         f"{persona}\n"
@@ -242,14 +354,23 @@ def ack_prompts(*, persona, user_text, scene_line="", action_line="",
         blocks.append(f"补充情况：{detail}")
     if history:
         blocks.append("刚才的聊天（从早到晚）：\n" + "\n".join(history))
-    blocks.append(
-        "要求：写成两行。第一行先接住对方这句话——答应下来，顺便带点你此刻的情绪"
-        "（吐槽、撒娇、反问都行，别端着）；"
-        f"这一行的结尾就是{KACHA}两个字，不要把它放在开头，行末也别再加别的标点。"
-        "第二行再顺口说一句你手上正在忙什么、或者为什么现在才拍。"
-        "两行都是第一人称口语，各 8~25 字，不要引号、不要 emoji、不要解释；"
-        "上面没给过的具体菜名、人名、物品不要凭空编。"
-    )
+    if mark:
+        blocks.append(
+            "要求：写成两行。第一行先接住对方这句话——答应下来，顺便带点你此刻的情绪"
+            "（吐槽、撒娇、反问都行，别端着）；"
+            f"这一行的结尾就是{KACHA}两个字，不要把它放在开头，行末也别再加别的标点。"
+            "第二行再顺口说一句你手上正在忙什么、或者为什么现在才拍。"
+            "两行都是第一人称口语，各 8~25 字，不要引号、不要 emoji、不要解释；"
+            "上面没给过的具体菜名、人名、物品不要凭空编。"
+        )
+    else:
+        blocks.append(
+            "要求：写成两行。第一行先接住对方这句话——答应下来，顺便带点你此刻的情绪"
+            "（吐槽、撒娇、反问都行，别端着）；第二行再顺口说一句你手上正在忙什么、"
+            "或者为什么现在才拍。两行都是第一人称口语，各 8~25 字，"
+            "不要拟声词、不要（咔嚓）或🤳之类的符号、不要引号、不要 emoji、不要解释；"
+            "上面没给过的具体菜名、人名、物品不要凭空编。"
+        )
     return system, "\n".join(blocks)
 
 
