@@ -52,6 +52,8 @@ try:  # AstrBot package loader
     from .selfie_core.scene_context import scene_context_text, local_datetime
     from .selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from .selfie_core.living import photo_variation
+    from .selfie_core.event_materials import action_name, active_event
+    from .selfie_core.sleep import sleep_photo
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 except ImportError:  # direct local test import
     from selfie_core.defaults import *
@@ -73,6 +75,8 @@ except ImportError:  # direct local test import
     from selfie_core.scene_context import scene_context_text, local_datetime
     from selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from selfie_core.living import photo_variation
+    from selfie_core.event_materials import action_name, active_event
+    from selfie_core.sleep import sleep_photo
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 
 
@@ -2829,8 +2833,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         phase = str(scene.get("living_phase") or "")
         if phase in ("end", "prepare"):
             return scene, ""
-        active = self.state.get("active")
-        if not isinstance(active, dict):
+        # active 存在 state['living']['active']（由生活引擎写入），不是顶层 state['active']。
+        active = active_event(self.state)
+        if not active:
             return scene, ""
         event = active.get("event")
         if not isinstance(event, dict) or str(event.get("id")) != event_id:
@@ -2852,10 +2857,66 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     for key in ("type", "tags", "room"):
                         if extra.get(key):
                             variant[key] = extra[key]
+        if not action:
+            # 没有动作随机池的事件：用当前阶段的主动作正文，保证事件动作照样顶替自拍姿势。
+            phases = event.get("phases") if isinstance(event.get("phases"), list) else []
+            index = scene.get("phase_index")
+            part = phases[index] if type(index) is int and 0 <= index < len(phases) else {}
+            action = str((part or {}).get("action") or event.get("action") or "").strip()
+            if action:
+                label = action_name(event, part or event)
         if action:
             variant["event_action"] = action
             variant["activity"] = label or str(variant.get("activity") or "")
         return variant, action
+
+    def _photo_action(self, scene, expression, gesture, night_kind=""):
+        """唯一决定「谁顶替默认自拍动作」的地方。
+
+        优先级：睡觉（00:30 后）> 吃饭/做饭 > 事件当前动作 > 默认自拍。
+        睡觉、吃饭、事件都只发这一套动作，不会再和「伸手自拍」叠在一起；
+        自定义角色走同一个判断，只把 ``custom_text`` 追加到它自己的提示词后面。
+        """
+        scene = scene if isinstance(scene, dict) else {}
+        if night_kind:
+            return sleep_photo(night_kind, expression)
+        meal = meal_photo(scene, self.rng)
+        if meal:
+            return {
+                "source": "meal",
+                "intro": SELFIE_SHOT_INTRO,
+                "framing": meal["framing"],
+                "pose": meal["pose"],
+                "face_line": f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。",
+                "light_line": "",
+                "tail": meal["tail"],
+                "custom_text": "这一张的动作与画面要求：" + meal_text(meal),
+            }
+        event_action = str(scene.get("event_action") or "").strip()
+        if event_action:
+            return {
+                "source": "event",
+                "intro": "一张 9:16 竖屏照片，记录她此刻正在做的事：",
+                "framing": "竖屏照片构图（记录她此刻正在做的事）：",
+                "pose": ("这一张的动作、机位和景别完全按下面这段来，"
+                         f"不要再画成伸手自拍：{event_action}；"),
+                "face_line": "",
+                "light_line": "",
+                "tail": "",
+                "custom_text": "这一张的动作与机位（务必照做）：" + event_action,
+            }
+        return {
+            "source": "default",
+            "intro": SELFIE_SHOT_INTRO,
+            "framing": "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）：",
+            "pose": ("镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
+                     "手掌在画面外，画面里只有这条手臂；"
+                     f"另一只手{gesture}；"),
+            "face_line": f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。",
+            "light_line": "",
+            "tail": "",
+            "custom_text": "",
+        }
 
     def _selfie_prompt(self, scene: dict, model: str | None = None,
                        style: str | None = None,
@@ -2866,38 +2927,33 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         - 不带参考图：纯文字人设
         - 画风只有两种：纯二次元动漫 / 写实真人照片；用户当场点名的画风优先
         - 主人要求摘帽子/脱外套时，用 edit_note 明确让模型把参考图里的物件去掉
+        - 动作只由 ``_photo_action`` 决定：睡觉 / 吃饭 / 事件动作都会顶替默认自拍姿势
         """
         profile = self._profile()
-        # 吃饭 / 做饭这一张：换成专门的机位和动作，菜和主食必须入画。
-        if isinstance(scene, dict) and str(scene.get("living_phase") or "") in ("cook", "lunch", "lunch_out"):
+        scene = scene if isinstance(scene, dict) else {}
+        # 吃饭 / 做饭这一张：把菜品库里的描述补进场景，供动作和画面要求引用。
+        if str(scene.get("living_phase") or "") in ("cook", "lunch", "lunch_out"):
             dish = str(scene.get("meal") or "").strip()
             info = self._meal_library().get(dish) if dish else None
             if info and info.get("description"):
                 scene = dict(scene)
                 scene["meal_desc"] = str(info["description"])
-        meal = meal_photo(scene, self.rng)
-        # 事件进行中：这一张的动作要换成事件当前阶段的动作，而不是继续用默认自拍姿势。
-        event_action = str(scene.get("event_action") or "").strip() if isinstance(scene, dict) else ""
+        if look is None:
+            look = self._resolve_look(scene)
+        night_kind = self._night_scene_kind(scene)  # "" / "bed" / "bunk" / "cyber"
+        sleepy = str(scene.get("type") or "") == "bed_sleepy"
+        expression = self.rng.choice(
+            SLEEPY_EXPRESSIONS if (sleepy or night_kind == "cyber") else EXPRESSIONS)
+        gesture = self.rng.choice(GESTURES)
+        action = self._photo_action(scene, expression, gesture, night_kind)
         if profile.is_custom:
-            prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene), style=self._style(style))
-            if meal:
-                prompt += "\n这一张的动作与画面要求：" + meal_text(meal)
-            if event_action:
-                prompt += "\n这一张的动作与机位（务必照做）：" + event_action
+            prompt = build_custom_prompt(profile, scene, look, style=self._style(style))
+            if action["custom_text"]:
+                prompt += "\n" + action["custom_text"]
             return prompt
         use_ref = self._use_reference(model, style)
         style = self._style(style)
         style_block = STYLE_BLOCK[style]
-        sleepy = str(scene.get("type") or "") == "bed_sleepy"
-        # 入睡后的拍法分三种：躺床 / 青旅上下铺 / 网吧包厢趴桌子（统一关灯）
-        night_kind = self._night_scene_kind(scene)  # "" / "bed" / "bunk" / "cyber"
-        bunk = night_kind == "bunk"
-        cyber_night = night_kind == "cyber"
-        light_line = ""
-        expression = self.rng.choice(SLEEPY_EXPRESSIONS if (sleepy or cyber_night) else EXPRESSIONS)
-        gesture = self.rng.choice(GESTURES)
-        if look is None:
-            look = self._resolve_look(scene)
         wear = self._wear_text(look)
         hat = str(look.get("hat") or "")
         hair = str(look.get("hair") or CHAR_HAIR)
@@ -2907,76 +2963,16 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         restyle_note = ""
         if use_ref and look.get("restyle"):
             restyle_note = "参考图里的衣服不要照抄，人物的衣服必须按下面这段重新画："
-        if bunk:
-            framing = "近距离自拍特写（只拍到她的脸、枕头和上下铺的护栏，脸凑得很近）："
-            pose = (
-                "她已经躺在青年旅舍的上下铺床位上（上铺或下铺），侧躺着把被子拉到胸口，"
-                "被子一角堆在下巴下面，头和肩膀都埋进枕头里，一只手从被子里伸出来、"
-                "前臂朝镜头方向探出、手掌落在画面边缘之外（画面里没有手机、没有自拍杆）；头顶就是上铺的床板和铁护栏，"
-                "床头栏杆上挂着外套和毛巾；"
-            )
-            face_line = f"脸占画面大部分，{expression}，看向镜头。"
-            light_line = (
-                "光线：房间的灯早就关了，整个房间是黑的，唯一的光源是屏幕的冷白微光，"
-                "只照亮她的脸、伸向镜头的手和被子边缘，其余全部沉进黑暗里；"
-                "不要画成开着床头灯、小夜灯或者暖黄氛围灯。"
-            )
-        elif sleepy:
-            framing = "近距离自拍特写（只拍到她的脸和裹着被子的肩膀，脸凑得很近）："
-            pose = (
-                "她侧躺在床上，整个人缩在被子里、被子裹到下巴，只露出脸和一点肩膀，"
-                "一只手从被子里伸出来、前臂朝镜头方向探出、手掌落在画面边缘之外（画面里没有手机、没有自拍杆）；"
-            )
-            face_line = f"脸占画面大部分，{expression}，看向镜头。"
-            light_line = (
-                "光线：房间的灯已经关了，屋里是黑的，唯一的光是屏幕的冷白微光，"
-                "只照亮她的脸、抓着被角的手和被子边缘，四周沉在暗部里；"
-                "不要画成开着床头灯、小夜灯或者暖黄氛围灯。"
-            )
-        elif cyber_night:
-            framing = "近距离自拍特写（侧脸贴近镜头，只拍到脸、手臂和披着外套的肩背）："
-            pose = (
-                "她趴在网吧包厢的电竞桌上，侧脸枕在自己的一条手臂上，"
-                "另一只手前臂朝镜头方向探出、手掌落在画面边缘之外（画面里没有手机、没有自拍杆）；外套已经脱下来、披在背上，从肩膀一直盖到腰，"
-                "像一床临时的被子（外套不要穿在身上）；显示器已经关了、键盘鼠标推到一边，"
-                "桌角还剩半瓶饮料和揉皱的零食袋；"
-            )
-            face_line = f"脸占画面大部分，{expression}，半睁着眼看镜头。"
-            light_line = (
-                "光线：包厢的灯已经关了，整体接近全黑，只有屏幕的冷白光照亮"
-                "贴着桌面的半张脸、手背和外套上的一小片褶皱，四周沉在暗里；"
-                "不要画成亮着蓝紫色氛围灯、屏幕亮着或者开着顶灯。"
-            )
-        else:
-            if event_action:
-                # 事件进行中：用事件当前阶段的动作顶替默认自拍姿势，只发这一套动作。
-                framing = "竖屏照片构图（记录她此刻正在做的事）："
-                pose = ("这一张的动作、机位和景别完全按下面这段来，"
-                        f"不要再画成伸手自拍：{event_action}；")
-            elif meal:
-                # 吃饭 / 做饭：用专门的构图和动作，替掉「伸长手臂自拍」的默认姿势。
-                framing = meal["framing"]
-                pose = meal["pose"]
-            else:
-                framing = "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）："
-                pose = (
-                    "镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
-                    "手掌在画面外，画面里只有这条手臂；"
-                    f"另一只手{gesture}；"
-                )
-            face_line = ("" if event_action
-                         else f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。")
+        framing = action["framing"]
+        pose = action["pose"]
+        face_line = action["face_line"]
+        light_line = action["light_line"]
+        shot_intro = action["intro"]
         # 夜间睡衣的氛围（光线/湿度/姿态/神态）单独补一句：张力靠这个撑，而不是靠穿得少
         mood = str(look.get("mood") or "").strip()
         # 入睡后的姿势和光线已经单独写死，睡衣 mood 里的「靠床头/开小夜灯」会跟它打架，跳过
-        if mood and not (sleepy or bunk or cyber_night):
+        if mood and action["source"] != "sleep":
             pose += f"氛围：{mood}；"
-        if meal:
-            shot_intro = "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
-        elif event_action:
-            shot_intro = "一张 9:16 竖屏照片，记录她此刻正在做的事："
-        else:
-            shot_intro = "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
         if use_ref:
             if style == STYLE_REALISTIC:
                 ref_intro = (
@@ -3016,7 +3012,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + scene_context_text(scene)
             + f"场景：{scene.get('desc', '')}，背景是真实世界的环境，"
             "有清晰的环境细节、真实材质和自然光影，背景轻微虚化。"
-            + (meal["tail"] if meal else "")
+            + action["tail"]
             + light_line
             + (self._tongue_line() if TONGUE_PAT.search(head) else "")
             + STYLE_QUALITY[style]

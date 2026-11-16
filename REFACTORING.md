@@ -160,6 +160,16 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 5. 若旧版确实无法读取新 runtime，先保留最新副本，再单独评估并恢复必要运行数据。**恢复完整旧 runtime 会失去备份之后的活动与新照片记录**；这是数据回退，不是无损操作。custom namespace 在旧版中可能不可见，保留它们等待迁移，不要删除。
 6. 核查代码、配置与运行目录对应关系后启动，先检查日志/状态读取，不要立即触发付费生图或空间发布。发现不兼容则停止并从刚保存的当前副本恢复，另行处理迁移。
 
+## v1.5.19 统一动作覆写与事件 active 结构修复
+
+- `event_materials.active_event(state)`：统一读取当前事件计划（优先 `state['living']['active']`，兼容旧版顶层 `state['active']`）。此前 `main._event_photo_scene()` 与 `world._scene_reusable()` 都直接读顶层 `state['active']`，运行时永远拿不到 active，导致事件动作不生效、配文沿用旧缓存里的长提示词。
+- `main._photo_action(scene, expression, gesture, night_kind)`：唯一的「谁顶替默认自拍动作」判断，优先级 **睡觉 > 吃饭/做饭 > 事件当前动作 > 默认自拍**，返回 `{source, intro, framing, pose, face_line, light_line, tail, custom_text}`；`_selfie_prompt()` 只消费这份结果，睡觉/吃饭/事件不再各写一套分支。
+- `selfie_core/sleep.py`：新增三种入睡拍法（普通床 / 青旅上下铺 / 网吧包厢）的构图、动作、关灯要求与 `sleep_cue()`；`defaults.SELFIE_SHOT_INTRO` 统一自拍开头语。
+- `main._event_photo_scene()`：事件阶段没有动作随机池时，退回当前阶段主动作正文，活动名仍只用短名，保证「事件动作一定顶替自拍姿势」。
+- `world._scene_caption_tail()`：超长 `activity`（>24 字）压成短概括，配文永不携带整段生图提示词。
+- `workspace._test()` / `views/selfie/index.html`：生图测试动作来源新增 `sleep` + `sleep_kind`（bed/bunk/cyber），「动作 / 特写」只列三种过夜拍法；提交、确认弹窗、结果信息都显示所选拍法。
+- 测试：`tests/test_sleep.py` 新增睡觉模板/测试 cue 用例；`test_main_boundaries` 增加统一覆写优先级、事件 active 嵌套结构、没有动作池的事件、睡觉/吃饭提示词替换；`test_world_integration` 增加配文兜底；总计 419 项通过。
+
 ## v1.5.18 事件动作单套化、日程概括与菜品补种
 
 - `event_materials.py`：新增 `summarize_action()`、`usable_action_name()`、`usable_action_text()`、`action_name()`、`action_name_for_text()`、`event_label()`。动作素材的 `text` 是长篇生图提示词，`name` 才是「逛商场」这种短名字；从旧数据迁移来的条目 name 是提示词前 24 字，会被识别为不可用并退回事件名当概括。日程、照片配文只用短名字——**这条规则对所有事件、所有阶段通用**：短名字 → 手写短动作 → 事件名（截 15 字）→ 概括，任一环节拿不到人话就退到「活动现场 / 外出活动」，绝不把提示词原样带出去。

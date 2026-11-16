@@ -8,6 +8,7 @@ import time
 import random
 from datetime import datetime
 from .living import LivingEngine
+from .event_materials import active_event, summarize_action, usable_action_text
 from .world_editor import province_travel_hours, resolve_city
 from astrbot.api import logger
 from .geography import WorldProfile, CityCatalog
@@ -296,6 +297,11 @@ class WorldMixin:
         if cap:
             return cap
         activity = str(scene.get("activity") or "")
+        # 事件动作正文是长篇生图提示词：配文只留短概括。旧缓存/异常数据也会在这里兜住，
+        # 保证「发图时带一大段提示词」不会再发生。
+        if len(activity.strip()) > 24:
+            short = usable_action_text(summarize_action(activity))
+            return f"在{short}" if short else "在外面"
         # 活动名本身就带「在/去」时别再拼一层，避免「在在某某的酒店住下」
         if activity.startswith(("在", "去", "准备去", "我要去", "我要回")):
             return activity
@@ -876,8 +882,8 @@ class WorldMixin:
                     return False
             except (TypeError, ValueError):
                 pass
-        active = self.state.get('active')
-        event = active.get('event') if isinstance(active, dict) else None
+        active = active_event(self.state)
+        event = active.get('event') if active else None
         if isinstance(event, dict):
             try:
                 start = datetime.fromisoformat(str(active.get('start')))

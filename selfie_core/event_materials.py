@@ -1,4 +1,4 @@
-﻿"""Pure event-local named libraries; global references are explicitly scoped.
+"""Pure event-local named libraries; global references are explicitly scoped.
 
 v1.5.12 起事件阶段支持三类随机池（场景 / 动作 / 服装）：阶段引用仍然保留
 ``scene_ref`` / ``action_ref`` / ``outfit_ref`` 作为「主素材」，随机池是在主素材
@@ -125,6 +125,22 @@ def _resolve_action(ref, indexes, global_materials):
     if not text:
         raise ValueError('global material has no content')
     return text
+
+
+def active_event(state):
+    """当前生效的事件计划。
+
+    生活引擎把 ``active`` 写在 ``state['living']['active']``（只有 ``living``
+    子树会被 LivingEngine 修改）；旧版本/测试里有顶层 ``state['active']`` 的写法，
+    这里兼容两种，避免「事件进行中却查不到事件」导致动作/配文退回默认。
+    """
+    if not isinstance(state, dict):
+        return {}
+    living = state.get("living")
+    active = living.get("active") if isinstance(living, dict) else None
+    if not isinstance(active, dict):
+        active = state.get("active")
+    return active if isinstance(active, dict) else {}
 
 
 def summarize_action(text, limit=15):

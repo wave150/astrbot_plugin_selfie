@@ -372,6 +372,7 @@
                 <option value="daily">日常动作（特写库）</option>
                 <option value="event">事件动作（事件素材）</option>
                 <option value="meal">吃饭（菜品库）</option>
+                <option value="sleep">睡觉（夜间动作）</option>
               </select>
             </div>
             <div class="field">
@@ -747,6 +748,12 @@
     { value: "2", label: "吃饭机位 3：把碗端到胸前（碗里的饭看得清）" },
     { value: "3", label: "吃饭机位 4：餐桌对面拍（她、碗筷和菜同框）" },
     { value: "4", label: "吃饭机位 5：吃到一半（桌面留着用过的餐具）" }
+  ];
+  /* 生图测试：动作来源选「睡觉」时，「动作 / 特写」只列 00:30 之后的三种过夜拍法。 */
+  var SLEEP_KIND_OPTIONS = [
+    { value: "bed", label: "睡觉 1：普通床（侧躺、被子裹到下巴，关灯）" },
+    { value: "bunk", label: "睡觉 2：青旅上下铺（侧躺拉被子，关灯）" },
+    { value: "cyber", label: "睡觉 3：网吧包厢（趴桌、外套披在背上，关灯）" }
   ];
 
   /* 引擎约定：周一 = 0 … 周日 = 6 */
@@ -2728,6 +2735,22 @@
     select.value = keep ? previous : MEAL_SETUP_OPTIONS[0].value;
   }
 
+  /* 睡觉来源专用：动作下拉只放 00:30 之后的三种过夜拍法，值是 bed / bunk / cyber。 */
+  function fillSleepSelect(select, preserve) {
+    if (!select) return;
+    var previous = preserve ? select.value : "";
+    clear(select);
+    SLEEP_KIND_OPTIONS.forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    });
+    select.disabled = false;
+    var keep = SLEEP_KIND_OPTIONS.some(function (item) { return item.value === previous; });
+    select.value = keep ? previous : SLEEP_KIND_OPTIONS[0].value;
+  }
+
   /* ---------------- 生图测试：事件 / 家 分类、场景与动作 ---------------- */
 
   function homeRoomMap() {
@@ -3494,12 +3517,17 @@
     if (closeupHint) {
       closeupHint.textContent = state.testActionSource === "meal"
         ? "吃饭来源下这里只列 5 套吃饭机位，生成时按选中的那套拍。"
-        : "";
+        : state.testActionSource === "sleep"
+          ? "睡觉来源下这里列 00:30 之后的三种过夜拍法，生成时会带「关灯、只有屏幕冷光」的要求。"
+          : "";
     }
     if (state.testActionSource === "meal") {
       fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
       /* 吃饭来源下「动作 / 特写」只显示 5 套吃饭机位，不再列特写库。 */
       fillMealSetupSelect(closeupSelect, preserve);
+      state.testEventActions = [];
+    } else if (state.testActionSource === "sleep") {
+      fillSleepSelect(closeupSelect, preserve);
       state.testEventActions = [];
     } else if (state.testActionSource === "daily") {
       fillMaterialSelect(closeupSelect, state.materials.closeup, "closeup", preserve);
@@ -3553,6 +3581,8 @@
       if (!(state.materials.meal || []).length) reasons.push("素材库没有菜品（meal）");
       else if (!$("#t-meal") || $("#t-meal").value === "") reasons.push("还没有选择菜品");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择吃饭动作");
+    } else if (state.testActionSource === "sleep") {
+      if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择睡觉动作");
     } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
@@ -3660,6 +3690,11 @@
       var mealSetup = MEAL_SETUP_OPTIONS[payload.meal_setup];
       lines.push("动作：吃饭 / 菜品「" + str(payload.meal_name) + "」" +
         (mealSetup ? " / " + mealSetup.label : ""));
+    } else if (payload.action_source === "sleep") {
+      var sleepKind = SLEEP_KIND_OPTIONS.filter(function (item) {
+        return item.value === str(payload.sleep_kind);
+      })[0] || SLEEP_KIND_OPTIONS[0];
+      lines.push("动作：睡觉 / " + sleepKind.label);
     } else {
       lines.push(payload.action_source === "event"
         ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
@@ -3966,6 +4001,14 @@
       payload.meal_setup = setupIndex;
       var setupItem = MEAL_SETUP_OPTIONS[setupIndex] || MEAL_SETUP_OPTIONS[0];
       actionLine = "动作：吃饭 / 菜品「" + (payload.meal_name || ("#" + mealId)) + "」/ " + setupItem.label;
+    } else if (state.testActionSource === "sleep") {
+      var sleepSelect = $("#t-closeup");
+      var sleepKind = sleepSelect ? str(sleepSelect.value) : "bed";
+      payload.sleep_kind = sleepKind || "bed";
+      var sleepItem = SLEEP_KIND_OPTIONS.filter(function (item) {
+        return item.value === payload.sleep_kind;
+      })[0] || SLEEP_KIND_OPTIONS[0];
+      actionLine = "动作：睡觉 / " + sleepItem.label;
     } else if (state.testActionSource === "daily") {
       var closeupId = selectedMaterialId($("#t-closeup"));
       if (closeupId === null) { toast("请选择日常特写", "err"); return; }
@@ -6484,7 +6527,8 @@
     var actionSource = $("#t-action-source");
     if (actionSource) actionSource.addEventListener("change", function () {
       state.testActionSource = actionSource.value === "event" ? "event"
-        : actionSource.value === "meal" ? "meal" : "daily";
+        : actionSource.value === "meal" ? "meal"
+        : actionSource.value === "sleep" ? "sleep" : "daily";
       if (state.testActionSource === "daily") {
         state.testAction = "";
         var actionBox = $("#t-action");

@@ -22,6 +22,7 @@ from .living import validate_event, LivingEngine
 from .event_materials import migrate_event, resolve_event
 from .overnight import overnight_list
 from .meal import MEAL_SETUPS, meal_cue
+from .sleep import SLEEP_KINDS, sleep_cue
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -755,7 +756,7 @@ class WorkspaceService:
         default_source = "event" if mode == "event" else "daily"
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
-        if costume_source not in ("daily", "event") or action_source not in ("daily", "event", "meal"):
+        if costume_source not in ("daily", "event") or action_source not in ("daily", "event", "meal", "sleep"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
         event = None
@@ -818,6 +819,14 @@ class WorkspaceService:
                 meta["meal_name"] = meal_entry["name"]
                 if setup is not None:
                     meta["meal_setup"] = setup
+        elif action_source == "sleep":
+            # 睡觉动作：00:30 之后的三种过夜拍法，直接复用自拍提示词的同一份描述。
+            kind = str(payload.get("sleep_kind") or "").strip()
+            if kind not in SLEEP_KINDS:
+                kind = "bed"
+            cue_override = {"text": sleep_cue(kind)}
+            if meta is not None:
+                meta["sleep_kind"] = kind
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 
