@@ -11,6 +11,9 @@ from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 import math
 import re
+from .event_materials import (
+    action_name, action_name_for_text, event_label, summarize_action, usable_action_text,
+)
 from .overnight import pick_overnight
 
 OUTFIT_MODES = ('fixed', 'event', 'inherit')
@@ -192,7 +195,7 @@ def photo_variation(event, phase_index, rng):
     Event phases may carry ``scene_pool`` / ``action_pool`` (already resolved to
     inline values by ``event_materials.resolve_event``). The first selected
     material stays the primary for schedule/diary; pools only add per-photo
-    variety. Returns ``(scene_entry | None, action_text)``.
+    variety. Returns ``(scene_entry | None, action_text, action_label)``.
     """
     phases = event.get('phases') if isinstance(event, dict) else None
     if not isinstance(phases, list):
@@ -210,7 +213,8 @@ def photo_variation(event, phase_index, rng):
                if isinstance(text, str) and text.strip()]
     scene = deepcopy(rng.choice(scenes)) if scenes else None
     action = str(rng.choice(actions)) if actions else ''
-    return scene, action
+    label = action_name_for_text(event, action) if action else ''
+    return scene, action, label
 
 
 class LivingEngine:
@@ -231,6 +235,28 @@ class LivingEngine:
             if other == fingerprint:
                 return
         rows.append(row)
+
+    @staticmethod
+    def _observed_activity(record, events_by_id):
+        """观察记录里的活动也只留概括：旧数据存的是整段生图提示词。
+
+        任何事件（不只是当前事件）的观察记录、以及已经被清理掉的历史事件，
+        都不能在日程/日记里露出提示词原文。
+        """
+        text = str(record.get('activity') or '').strip()
+        if not text:
+            return text
+        if len(text) <= 24:
+            return text
+        event = events_by_id.get(str(record.get('event_id') or ''))
+        if isinstance(event, dict):
+            for part in [event] + list(event.get('phases') or []):
+                if isinstance(part, dict) and str(part.get('action') or '').strip() == text:
+                    return action_name(event, part)
+            name = str(event.get('name') or '').strip()
+            if name:
+                return event_label(event)
+        return usable_action_text(summarize_action(text)) or "外出活动"
 
     def schedule(self, day, now=None):
         """Read-only timetable: planned intervals and genuine observation points.
@@ -259,16 +285,23 @@ class LivingEngine:
         plans = list(self.state.get('event_plans', {}).values())
         if self.state.get('active') and not any(p.get('start') == self.state['active'].get('start') and p['event']['id'] == self.state['active']['event']['id'] for p in plans):
             plans.append(self.state['active'])
+        events_by_id = {}
+        for plan in plans:
+            event = plan.get('event') if isinstance(plan, dict) else None
+            if isinstance(event, dict):
+                events_by_id[str(event.get('id') or '')] = event
         for plan in plans:
             event = plan['event']
             start, end = datetime.fromisoformat(plan['start']), datetime.fromisoformat(plan['end'])
             common = dict(event_id=event['id'], city=event['city'], district=event['district'])
-            add(start - timedelta(hours=1), start, '提前准备：' + event.get('name', event['id']), **common)
+            add(start - timedelta(hours=1), start, '准备：' + event_label(event), **common)
             for index, phase in enumerate(event.get('phases') or [{'start': 0, 'end': event['duration']}]):
+                # 日程只写概括（动作素材的短名字），不把生图提示词整段搬进来。
                 add(start + timedelta(hours=phase['start']), start + timedelta(hours=phase['end']),
-                    phase.get('action') or event.get('action') or event.get('name', event['id']), phase_index=index, **common)
+                    action_name(event, phase) or event.get('name', event['id']),
+                    phase_index=index, **common)
             if event.get('end_scene_enabled', True):
-                add(end, end + timedelta(hours=1), event.get('name', event['id']) + '结束后场景', phase_index=-2, **common)
+                add(end, end + timedelta(hours=1), event_label(event) + '结束后场景', phase_index=-2, **common)
         # Accepted event intervals take precedence over tentative home/lunch.
         event_rows = [row for row in rows if row.get('event_id')]
         clipped = list(event_rows)
@@ -302,7 +335,8 @@ class LivingEngine:
             at = datetime.fromisoformat(record['at'])
             if now is not None and at > now:
                 continue
-            rows.append(dict(deepcopy(record), start=record['at'], end=record['at'], status='observed'))
+            rows.append(dict(deepcopy(record), start=record['at'], end=record['at'], status='observed',
+                             activity=self._observed_activity(record, events_by_id)))
         return sorted(rows, key=lambda row: (row['start'], row['status']))
 
     def diary(self, day):
@@ -398,11 +432,16 @@ class LivingEngine:
         scene = deepcopy(raw) if isinstance(raw, dict) else {'desc': raw}
         scene.setdefault('type', 'indoor')
         # 阶段没写动作/服装时沿用事件主场景的全局值（旧数据里的空字符串同理）。
-        scene.setdefault('activity', part.get('action') or e.get('action') or e.get('name') or e['id'])
+        # 动作正文是长篇生图提示词：activity 只放短名字（用来写日程和照片文案），
+        # 完整正文单独放进 event_action，自拍时用它顶替「伸手自拍」的默认动作。
+        action_text = str(part.get('action') or e.get('action') or '').strip()
+        scene.setdefault('activity', action_name(e, part) or e.get('name') or e['id'])
+        if phase == 'active' and action_text:
+            scene['event_action'] = action_text
         if phase == 'prepare':
-            scene['activity'] = f"提前到场，准备参加{e.get('name', e['id'])}"
+            scene['activity'] = f"准备参加{event_label(e)}"
         elif phase == 'end':
-            scene['activity'] = f"{e.get('name', e['id'])}结束，在附近休息"
+            scene['activity'] = f"{event_label(e)}结束后，在附近休息"
         # 服装：事件随机池整天只摇一次；阶段随机池每段摇一次；也可沿用之前的阶段。
         phases = e.get('phases') or []
         outfit_index = phase_index if phase_index is not None else (

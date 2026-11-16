@@ -377,6 +377,7 @@
             <div class="field">
               <label class="field-label" for="t-closeup">动作 / 特写</label>
               <select class="input" id="t-closeup"></select>
+              <div class="field-hint" id="t-closeup-hint"></div>
             </div>
             <div class="field" id="t-meal-field" hidden>
               <label class="field-label" for="t-meal">菜品</label>
@@ -739,6 +740,14 @@
     interaction: "互动草稿必须是单行，并以「摸摸：」或「捏捏：」开头。",
     meal: "菜品草稿必须是单行：「菜名 | 约100字描述」，只写菜、主食、餐具和桌面，不写人物。"
   };
+  /* 生图测试：动作来源选「吃饭」时，「动作 / 特写」只列这 5 套吃饭机位（顺序同后端 meal.MEAL_SETUPS）。 */
+  var MEAL_SETUP_OPTIONS = [
+    { value: "0", label: "吃饭机位 1：近景自拍（上半身和餐桌入画）" },
+    { value: "1", label: "吃饭机位 2：斜上方俯拍（餐桌和饭菜占满下半幅）" },
+    { value: "2", label: "吃饭机位 3：把碗端到胸前（碗里的饭看得清）" },
+    { value: "3", label: "吃饭机位 4：餐桌对面拍（她、碗筷和菜同框）" },
+    { value: "4", label: "吃饭机位 5：吃到一半（桌面留着用过的餐具）" }
+  ];
 
   /* 引擎约定：周一 = 0 … 周日 = 6 */
   var WEEKDAYS = [
@@ -2703,6 +2712,22 @@
     return isFinite(id) ? id : null;
   }
 
+  /* 吃饭来源专用：动作下拉只放 5 套吃饭机位，值是 0..4（后端 meal_cue 的 setup）。 */
+  function fillMealSetupSelect(select, preserve) {
+    if (!select) return;
+    var previous = preserve ? select.value : "";
+    clear(select);
+    MEAL_SETUP_OPTIONS.forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    });
+    select.disabled = false;
+    var keep = MEAL_SETUP_OPTIONS.some(function (item) { return item.value === previous; });
+    select.value = keep ? previous : MEAL_SETUP_OPTIONS[0].value;
+  }
+
   /* ---------------- 生图测试：事件 / 家 分类、场景与动作 ---------------- */
 
   function homeRoomMap() {
@@ -3465,8 +3490,16 @@
     }
     var mealField = $("#t-meal-field");
     if (mealField) mealField.hidden = state.testActionSource !== "meal";
+    var closeupHint = $("#t-closeup-hint");
+    if (closeupHint) {
+      closeupHint.textContent = state.testActionSource === "meal"
+        ? "吃饭来源下这里只列 5 套吃饭机位，生成时按选中的那套拍。"
+        : "";
+    }
     if (state.testActionSource === "meal") {
       fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
+      /* 吃饭来源下「动作 / 特写」只显示 5 套吃饭机位，不再列特写库。 */
+      fillMealSetupSelect(closeupSelect, preserve);
       state.testEventActions = [];
     } else if (state.testActionSource === "daily") {
       fillMaterialSelect(closeupSelect, state.materials.closeup, "closeup", preserve);
@@ -3519,6 +3552,7 @@
     if (state.testActionSource === "meal") {
       if (!(state.materials.meal || []).length) reasons.push("素材库没有菜品（meal）");
       else if (!$("#t-meal") || $("#t-meal").value === "") reasons.push("还没有选择菜品");
+      else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择吃饭动作");
     } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
@@ -3623,7 +3657,9 @@
       : "服装：日常 #" + str(payload.costume_id));
     var actionName = payload.action_source === "event" ? testEventActionName(payload.event_action) : "";
     if (payload.action_source === "meal") {
-      lines.push("动作：吃饭 / 菜品「" + str(payload.meal_name) + "」");
+      var mealSetup = MEAL_SETUP_OPTIONS[payload.meal_setup];
+      lines.push("动作：吃饭 / 菜品「" + str(payload.meal_name) + "」" +
+        (mealSetup ? " / " + mealSetup.label : ""));
     } else {
       lines.push(payload.action_source === "event"
         ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
@@ -3924,7 +3960,12 @@
       var mealEntry = mealIndex >= 0 ? (state.materials.meal || [])[mealIndex] : null;
       payload.meal_id = mealId;
       payload.meal_name = str(mealEntry && mealEntry.name);
-      actionLine = "动作：吃饭 / 菜品「" + (payload.meal_name || ("#" + mealId)) + "」";
+      var setupSelect = $("#t-closeup");
+      var setupIndex = setupSelect ? parseInt(setupSelect.value, 10) : 0;
+      if (!isFinite(setupIndex) || setupIndex < 0) setupIndex = 0;
+      payload.meal_setup = setupIndex;
+      var setupItem = MEAL_SETUP_OPTIONS[setupIndex] || MEAL_SETUP_OPTIONS[0];
+      actionLine = "动作：吃饭 / 菜品「" + (payload.meal_name || ("#" + mealId)) + "」/ " + setupItem.label;
     } else if (state.testActionSource === "daily") {
       var closeupId = selectedMaterialId($("#t-closeup"));
       if (closeupId === null) { toast("请选择日常特写", "err"); return; }

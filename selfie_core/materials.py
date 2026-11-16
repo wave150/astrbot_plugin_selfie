@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,10 @@ import uuid
 KINDS = ("costume", "closeup", "interaction", "meal")
 FILENAMES = {"costume": "costumes.txt", "closeup": "closeup_prompts.txt",
              "interaction": "interaction.txt", "meal": "meals.txt"}
+# 随包默认素材的「种子版本」：升级时把新增的默认条目补进数据目录文件，
+# 用户改过/删掉的条目不会被还原（版本号相同就不再补）。
+SEED_VERSIONS = {"meal": 2}
+SEED_MARKER = ".materials_seed.json"
 _NUMBER = re.compile(r"^\s*([0-9]+)\s*[：:.、)）]\s*")
 
 
@@ -147,6 +152,62 @@ def ensure_files(root, default_root, kinds=KINDS):
         except OSError:
             continue
     return copied
+
+
+def merge_seed(root, default_root, kind, version):
+    """把随包默认条目按名称补进数据目录文件（一次性，按 ``version`` 记账）。
+
+    用途：默认菜品从 9 道扩到 53 道时，老用户数据目录里只有旧的 9 道。这里把
+    默认文件里「名字还没出现过」的条目追加进去，已有条目（包括用户改过描述、
+    改过名字的）一律不动。同一个版本号只补一次，用户之后删掉的默认条目不会被
+    再次还原。返回本次追加的条目名字列表。
+    """
+    kind = _kind(kind)
+    root, default_root = Path(root), Path(default_root)
+    marker_path = root / SEED_MARKER
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        marker = {}
+    if not isinstance(marker, dict):
+        marker = {}
+    if int(marker.get(kind) or 0) >= int(version):
+        return []
+    target = root / FILENAMES[kind]
+    source = default_root / FILENAMES[kind]
+    if not target.exists() or not source.exists():
+        return []
+    existing = parse_materials(kind, target.read_text(encoding="utf-8"))
+    defaults = parse_materials(kind, source.read_text(encoding="utf-8"))
+    names = {str(entry.get("name") or "").strip().casefold() for entry in existing}
+    additions = [entry for entry in defaults
+                 if str(entry.get("name") or "").strip().casefold() not in names]
+    if additions:
+        data = target.read_bytes()
+        newline = b"\r\n" if b"\r\n" in data else b"\n"
+        if data and not data.endswith((b"\n", b"\r")):
+            data += newline
+        next_id = max((entry["id"] for entry in existing), default=0) + 1
+        for entry in additions:
+            data += f"{next_id}：{entry['text']}".encode("utf-8") + newline
+            next_id += 1
+        temporary = target.with_name(target.name + ".tmp")
+        try:
+            temporary.write_bytes(data)
+            os.replace(temporary, target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    marker[kind] = int(version)
+    temporary = marker_path.with_name(marker_path.name + ".tmp")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, marker_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return [str(entry.get("name") or "") for entry in additions]
 
 
 def _numbered(kind, data):

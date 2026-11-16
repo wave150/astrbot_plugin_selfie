@@ -50,7 +50,7 @@ try:  # AstrBot package loader
     from .selfie_core.workspace_host import WorkspaceHostMixin
     from .selfie_core.language import character_text
     from .selfie_core.scene_context import scene_context_text, local_datetime
-    from .selfie_core.materials import FILENAMES, MaterialStore, parse_materials, ensure_files
+    from .selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from .selfie_core.living import photo_variation
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 except ImportError:  # direct local test import
@@ -71,7 +71,7 @@ except ImportError:  # direct local test import
     from selfie_core.workspace_host import WorkspaceHostMixin
     from selfie_core.language import character_text
     from selfie_core.scene_context import scene_context_text, local_datetime
-    from selfie_core.materials import FILENAMES, MaterialStore, parse_materials, ensure_files
+    from selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from selfie_core.living import photo_variation
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 
@@ -101,6 +101,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             ensure_files(self.data_dir, self.plugin_dir)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"[selfie] 复制默认素材到数据目录失败: {exc!r}")
+        # 默认素材扩充（例如菜品 9 → 53 道）只补新条目，不动用户改过的内容。
+        for kind, version in SEED_VERSIONS.items():
+            try:
+                added = merge_seed(self.data_dir, self.plugin_dir, kind, version)
+                if added:
+                    logger.info(f"[selfie] 素材库补齐默认{kind}条目 {len(added)} 条：{'、'.join(added[:6])}…")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[selfie] 补齐默认素材({kind})失败: {exc!r}")
         self.ref_path = os.path.join(self.plugin_dir, "assets", "ref.png")
         # 编辑模型专用：三视图里裁出来的竖版正面图（编辑模型会沿用参考图的画幅）
         self.ref_front_path = os.path.join(self.plugin_dir, "assets", "ref_front.png")
@@ -2232,9 +2240,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     Plain(f"今天已经拍够{self._daily_limit()}张啦，明天再给你看～")
                 ]))
                 return
-            scene, event_action = self._event_photo_scene(await self._get_scene())
-            if event_action:
-                cue = {"text": event_action, "tier": "event", "id": 0, "total": 0}
+            # 事件里的特写/互动只用这次的 cue，不叠加事件动作（用户点单特写时
+            # 只要特写提示词）；场景仍沿用事件当前地点。
+            scene = self._event_photo_scene(await self._get_scene())[0]
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
             style = self._style(style_override)
             cos_name = str((cand or {}).get("name") or "")
@@ -2804,16 +2812,22 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """给事件里的每一张照片加随机变化：场景池抽一条、动作池抽一条。
 
         阶段里的「主场景/主动作」仍用于日程、日记和聊天背景；这里只给这一次
-        拍照换一个池内场景与动作，返回 (场景副本, 抽到的动作文本)。不在事件里、
+        拍照换一个池内场景与动作，返回 (场景副本, 抽到的动作正文)。不在事件里、
         或者事件没有池时原样返回。
+
+        抽到的动作正文放进 ``event_action``，用来顶替默认的「伸手自拍」姿势；
+        ``activity`` 只放动作的短名字，日程和照片配文都用它，避免把整段生图
+        提示词发出去。
         """
         if not isinstance(scene, dict):
             return scene, ""
         event_id = str(scene.get("event_id") or "")
         if not event_id:
             return scene, ""
-        # 结束后的「在附近休息」场景是独立一幕，不套用阶段的场景/动作池。
-        if str(scene.get("living_phase") or "") == "end":
+        # 结束后的「在附近休息」场景是独立一幕，不套用阶段的场景/动作池；
+        # 提前到场的准备阶段也还没有「当前动作」，同样按主素材拍。
+        phase = str(scene.get("living_phase") or "")
+        if phase in ("end", "prepare"):
             return scene, ""
         active = self.state.get("active")
         if not isinstance(active, dict):
@@ -2822,7 +2836,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if not isinstance(event, dict) or str(event.get("id")) != event_id:
             return scene, ""
         try:
-            picked, action = photo_variation(event, scene.get("phase_index"), self.rng)
+            picked, action, label = photo_variation(event, scene.get("phase_index"), self.rng)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[selfie] 事件随机池抽取失败，按主素材拍: {e!r}")
             return scene, ""
@@ -2839,7 +2853,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                         if extra.get(key):
                             variant[key] = extra[key]
         if action:
-            variant["activity"] = action
+            variant["event_action"] = action
+            variant["activity"] = label or str(variant.get("activity") or "")
         return variant, action
 
     def _selfie_prompt(self, scene: dict, model: str | None = None,
@@ -2861,10 +2876,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 scene = dict(scene)
                 scene["meal_desc"] = str(info["description"])
         meal = meal_photo(scene, self.rng)
+        # 事件进行中：这一张的动作要换成事件当前阶段的动作，而不是继续用默认自拍姿势。
+        event_action = str(scene.get("event_action") or "").strip() if isinstance(scene, dict) else ""
         if profile.is_custom:
             prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene), style=self._style(style))
             if meal:
                 prompt += "\n这一张的动作与画面要求：" + meal_text(meal)
+            if event_action:
+                prompt += "\n这一张的动作与机位（务必照做）：" + event_action
             return prompt
         use_ref = self._use_reference(model, style)
         style = self._style(style)
@@ -2929,7 +2948,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "不要画成亮着蓝紫色氛围灯、屏幕亮着或者开着顶灯。"
             )
         else:
-            if meal:
+            if event_action:
+                # 事件进行中：用事件当前阶段的动作顶替默认自拍姿势，只发这一套动作。
+                framing = "竖屏照片构图（记录她此刻正在做的事）："
+                pose = ("这一张的动作、机位和景别完全按下面这段来，"
+                        f"不要再画成伸手自拍：{event_action}；")
+            elif meal:
                 # 吃饭 / 做饭：用专门的构图和动作，替掉「伸长手臂自拍」的默认姿势。
                 framing = meal["framing"]
                 pose = meal["pose"]
@@ -2940,12 +2964,19 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     "手掌在画面外，画面里只有这条手臂；"
                     f"另一只手{gesture}；"
                 )
-            face_line = f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。"
+            face_line = ("" if event_action
+                         else f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。")
         # 夜间睡衣的氛围（光线/湿度/姿态/神态）单独补一句：张力靠这个撑，而不是靠穿得少
         mood = str(look.get("mood") or "").strip()
         # 入睡后的姿势和光线已经单独写死，睡衣 mood 里的「靠床头/开小夜灯」会跟它打架，跳过
         if mood and not (sleepy or bunk or cyber_night):
             pose += f"氛围：{mood}；"
+        if meal:
+            shot_intro = "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
+        elif event_action:
+            shot_intro = "一张 9:16 竖屏照片，记录她此刻正在做的事："
+        else:
+            shot_intro = "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
         if use_ref:
             if style == STYLE_REALISTIC:
                 ref_intro = (
@@ -2962,7 +2993,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
             head = (
                 f"{ref_intro}，"
-                "画一张手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
+                f"{shot_intro}"
                 f"{framing}"
                 f"{style_block}"
                 f"{head_clause}"
@@ -2974,19 +3005,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
         else:
             head = (
-                "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
+                f"{shot_intro}"
                 f"{framing}"
                 f"{style_block}"
                 f"{pose}{face_line}"
                 f"人物：{self._character(look)}。"
             )
-        action_line = ""
-        if scene.get("event_id") and str(scene.get("activity") or "").strip():
-            action_line = (f"她此刻正在做的事：{str(scene.get('activity')).strip()}"
-                           "（动作自然融入画面，不要写成摆拍）。")
         return (
             head
-            + action_line
             + scene_context_text(scene)
             + f"场景：{scene.get('desc', '')}，背景是真实世界的环境，"
             "有清晰的环境细节、真实材质和自然光影，背景轻微虚化。"

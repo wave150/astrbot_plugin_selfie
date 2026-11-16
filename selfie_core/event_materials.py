@@ -1,4 +1,4 @@
-"""Pure event-local named libraries; global references are explicitly scoped.
+﻿"""Pure event-local named libraries; global references are explicitly scoped.
 
 v1.5.12 起事件阶段支持三类随机池（场景 / 动作 / 服装）：阶段引用仍然保留
 ``scene_ref`` / ``action_ref`` / ``outfit_ref`` 作为「主素材」，随机池是在主素材
@@ -125,6 +125,101 @@ def _resolve_action(ref, indexes, global_materials):
     if not text:
         raise ValueError('global material has no content')
     return text
+
+
+def summarize_action(text, limit=15):
+    """把一段生图动作提示词压成一句人话（日程/照片文案用）。
+
+    动作素材的正文是给画图模型的机位与姿态描述，动辄几百字。日程、照片配文、
+    聊天背景这些地方只该出现一句概括，所以取第一个句读之前的部分再截断。
+    """
+    body = str(text or "").strip()
+    for separator in ("。", "；", ";", "，", ",", "\n"):
+        head, found, _rest = body.partition(separator)
+        if found and head.strip():
+            body = head.strip()
+            break
+    return body.strip("，。；;、 ")[:limit]
+
+
+# 动作素材的 name 应该是「逛商场」这种短名字；从旧数据迁移过来的条目会把
+# 提示词正文截前 24 字当名字，这里识别出来并退回事件名当概括。
+_ACTION_NAME_HINTS = ("镜头", "机位", "景别", "拍摄", "画面", "构图", "俯视", "平视",
+                      "仰视", "特写", "近景", "中景", "全景")
+
+
+def usable_action_name(name):
+    """判断一个动作 name 是否真的是人话短名字；不是就返回空串。"""
+    body = str(name or "").strip()
+    if not body or len(body) > 12:
+        return ""
+    if body.strip("，。；;、：:") != body:
+        return ""
+    if any(word in body for word in _ACTION_NAME_HINTS):
+        return ""
+    return body
+
+
+def usable_action_text(text):
+    """动作正文本身就是一句短人话时直接拿来用（手写事件常用「听开场」这种）。"""
+    body = str(text or "").strip()
+    if not body or len(body) > 15:
+        return ""
+    if body.strip("，。；;、：:") != body:
+        return ""
+    if any(word in body for word in _ACTION_NAME_HINTS):
+        return ""
+    return body
+
+
+def event_label(event):
+    """没有可读动作名时，用事件名当概括（日程/配文只出现这一个短句）。"""
+    name = str((event or {}).get("name") or "").strip()
+    return name[:15]
+
+
+def action_name(event, part):
+    """阶段动作的短名字：素材库 name → 手写短动作 → 事件名 → 概括。
+
+    这是「日程 / 照片配文 / 聊天背景」唯一的动作概括入口：任何事件、任何阶段
+    都不允许把长篇生图提示词原样带出去。
+    """
+    part = part if isinstance(part, dict) else {}
+    ref = part.get("action_ref")
+    if isinstance(ref, dict) and ref.get("source") == "event":
+        rows = ((event or {}).get("materials") or {}).get("actions") or []
+        ident = str(ref.get("id"))
+        row = next((item for item in rows
+                    if isinstance(item, dict) and str(item.get("id")) == ident), None)
+        name = usable_action_name((row or {}).get("name"))
+        if name:
+            return name
+    short = usable_action_text(part.get("action"))
+    if short:
+        return short
+    summary = event_label(event)
+    if summary:
+        return summary
+    return usable_action_text(summarize_action(part.get("action"))) or "活动现场"
+
+
+def action_name_for_text(event, text):
+    """按动作正文反查素材库里的短名字（照片随机池抽到的那条）。"""
+    body = str(text or "").strip()
+    rows = ((event or {}).get("materials") or {}).get("actions") or []
+    if body:
+        row = next((item for item in rows if isinstance(item, dict)
+                    and str(item.get("text") or "").strip() == body), None)
+        name = usable_action_name((row or {}).get("name"))
+        if name:
+            return name
+    short = usable_action_text(body)
+    if short:
+        return short
+    summary = event_label(event)
+    if summary:
+        return summary
+    return usable_action_text(summarize_action(body)) or "活动现场"
 
 
 def _refs(value):

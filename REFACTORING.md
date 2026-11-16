@@ -160,6 +160,17 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 5. 若旧版确实无法读取新 runtime，先保留最新副本，再单独评估并恢复必要运行数据。**恢复完整旧 runtime 会失去备份之后的活动与新照片记录**；这是数据回退，不是无损操作。custom namespace 在旧版中可能不可见，保留它们等待迁移，不要删除。
 6. 核查代码、配置与运行目录对应关系后启动，先检查日志/状态读取，不要立即触发付费生图或空间发布。发现不兼容则停止并从刚保存的当前副本恢复，另行处理迁移。
 
+## v1.5.18 事件动作单套化、日程概括与菜品补种
+
+- `event_materials.py`：新增 `summarize_action()`、`usable_action_name()`、`usable_action_text()`、`action_name()`、`action_name_for_text()`、`event_label()`。动作素材的 `text` 是长篇生图提示词，`name` 才是「逛商场」这种短名字；从旧数据迁移来的条目 name 是提示词前 24 字，会被识别为不可用并退回事件名当概括。日程、照片配文只用短名字——**这条规则对所有事件、所有阶段通用**：短名字 → 手写短动作 → 事件名（截 15 字）→ 概括，任一环节拿不到人话就退到「活动现场 / 外出活动」，绝不把提示词原样带出去。
+- `living.py`：`_event_scene()` 的 `activity` 改放短名字，完整动作正文放进 `event_action`（仅 `phase == active` 时）；`schedule()` 的计划项用动作短名，观察记录用 `_observed_activity()` 在读取时把旧的长提示词压成概括；`photo_variation()` 返回值增加动作短名（第三项）。
+- `main.py`：`_event_photo_scene()` 把抽到的动作写进 `variant['event_action']`、`activity` 只留短名；准备阶段 / 结束场景不再套用阶段动作池。`_do_closeup()` 不再用事件动作覆盖特写 cue（事件内特写/互动只发点单的特写提示词）。`_selfie_prompt()` 有 `event_action` 时用它顶替默认「伸手自拍」姿势与构图，去掉原来追加的「她此刻正在做的事：<整段提示词>」，并同时承担 `event_action` 时的 9:16 照片开头语。
+- `meal.py` / `workspace.py`：`meal_cue(..., setup=N)` 支持指定 5 套吃饭机位之一；生图测试 payload 新增 `meal_setup`（0–4，越界按随机）。
+- `materials.py` / `main.py`：新增 `SEED_VERSIONS` 与 `merge_seed()`：升级时按名称把随包新增的默认条目补进数据目录文件（菜品 9 → 53 道），同一版本只补一次，用户改过 / 自建 / 删除的条目不受影响；`main.__init__` 在 `ensure_files()` 之后调用。
+- `views/selfie/index.html`：动作来源选「吃饭」时，「动作 / 特写」下拉改为 5 套吃饭机位（`#t-closeup` 复用），并加提示文字；测试提交带 `meal_setup`，结果信息显示所选机位。
+- `meals.txt`：默认从 9 道扩到 53 道（与 `living.MEALS` 一致，每道约 100 字，包含菜、主食、餐具与桌面）。
+- 测试：新增事件短名 / 日程概括 / 默认素材补种 / 吃饭机位 / 事件自拍提示词（AST 隔离执行 `_selfie_prompt`）用例；总计 407 项通过。
+
 ## v1.5.17 菜品素材、数据目录与日志器合规
 
 - `materials.py`：新增第四类 `meal`（`meals.txt`，格式 `菜名 | 描述`）；新增 `ensure_files()` 在首次加载时把插件包里的默认素材复制到数据目录；`MaterialStore` 支持 `fallback_root`：数据目录缺文件时只读回退插件包默认值，写入始终落在数据目录。

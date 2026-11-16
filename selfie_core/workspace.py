@@ -21,7 +21,7 @@ from . import legacy_world
 from .living import validate_event, LivingEngine
 from .event_materials import migrate_event, resolve_event
 from .overnight import overnight_list
-from .meal import meal_cue
+from .meal import MEAL_SETUPS, meal_cue
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -809,10 +809,15 @@ class WorkspaceService:
                                    if x["id"] == meal_id), None)
             if meal_entry is None:
                 raise WorkspaceError("请选择菜品（先在「添加素材」里添加菜品）")
+            # 测试面板「动作 / 特写」在吃饭来源下列出 5 套吃饭机位，选哪套就用哪套。
+            setup = payload.get("meal_setup")
+            setup = setup if type(setup) is int and 0 <= setup < len(MEAL_SETUPS) else None
             cue_override = {"text": meal_cue(meal_entry["name"], meal_entry["description"],
-                                             getattr(self.host, "rng", None))}
+                                             getattr(self.host, "rng", None), setup=setup)}
             if meta is not None:
                 meta["meal_name"] = meal_entry["name"]
+                if setup is not None:
+                    meta["meal_setup"] = setup
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 

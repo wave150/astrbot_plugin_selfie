@@ -189,13 +189,18 @@ def meal_photo(scene, rng=None):
     }
 
 
-def meal_cue(dish, description="", rng=None):
-    """生图测试「吃饭」动作使用：按选中菜品拼一段可直接当动作提示词的文字。"""
+def meal_cue(dish, description="", rng=None, setup=None):
+    """生图测试「吃饭」动作使用：按选中菜品拼一段可直接当动作提示词的文字。
+
+    ``setup`` 指定 5 套机位里的第几套（0 起）；不传或越界时随机抽一套。
+    """
     dish = str(dish or "").strip()
     if not dish:
         return ""
     pair = staple_note(dish)
-    framing, pose = (rng if rng is not None else random).choice(MEAL_SETUPS)
+    index = setup if type(setup) is int and 0 <= setup < len(MEAL_SETUPS) else None
+    picker = rng if rng is not None else random
+    framing, pose = MEAL_SETUPS[index] if index is not None else picker.choice(MEAL_SETUPS)
     text = framing + pose.format(dish=dish, staple=pair[0], hand=pair[1],
                                  table=pair[2], place="餐桌前")
     detail = str(description or "").strip()
