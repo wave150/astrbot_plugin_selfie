@@ -245,7 +245,9 @@ def caption_prompts(*, persona, kind, scene_line="", doing_line="", look_line=""
     if cos_name:
         blocks.append(f"照片里你 cos 的是「{cos_name}」")
     if scene_line:
-        blocks.append(f"你在：{scene_line}")
+        # 场景短句常以「在」开头，直接拼会变成「你在：在食堂」。
+        place = scene_line[1:] if scene_line.startswith("在") else scene_line
+        blocks.append(f"你在{place}")
     if doing_line:
         blocks.append(f"你正在做的：{doing_line}")
     if look_line:
