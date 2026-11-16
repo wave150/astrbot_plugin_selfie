@@ -165,6 +165,13 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 - `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
 - `test_main_boundaries.test_photo_action_priority_event_over_sleep_meal_then_default` 同步覆盖四种来源与顺序；总计 419 项通过。
 
+## v1.6.0 分段回复与改名
+
+- `selfie_core/dialogue.split_reply(text, max_segments=4)`：按句号 / 换行把回复拆成多条消息，句号作为分段符被移除；`！？…` 是语气不拆；超过 4 段时用逗号并进最后一段。返回值只依赖文本，与框架无关。
+- `main._send_reply(event, text)`：统一发送入口，逐段 `event.send`；自拍 / 特写 / 互动 / cos / 随机衣服特写的接单语都改走它，`_deliver_photo()` 的配文也逐段发送，存档配文用逗号连接各段。
+- 只改展示层：`metadata.yaml` 的 `display_name` / `short_desc` / `desc` / `tags` 换成「她的一天 · 角色生活自拍」，包名 `name` 不动（插件市场 ID `wave150/astrbot_plugin_selfie` 不变）。
+- 测试：`test_dialogue` 新增分段/句号清理/超段合并用例，`test_main_boundaries` 新增 `_send_reply` 与多段配文发送用例；总计 458 项通过。
+
 ## v1.5.21 拟人化拍照对话（措辞层独立）
 
 - 新增 `selfie_core/dialogue.py`：完全不依赖 AstrBot 的措辞层。`KACHA`、`with_kacha()`（剥掉 🤳 与重复标记后把（咔嚓）固定在第一句末尾，句尾 ～/。/… 保留）、`clean_reply()`、`usable_reply()` / `usable_caption()`（长度与提示词味过滤）、`history_lines()`（解析会话历史的 OpenAI 消息列表，跳过 system/tool，图片记 `[图片]`）、`ack_prompts()` / `caption_prompts()`（接单与配文提示词）。

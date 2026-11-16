@@ -108,6 +108,28 @@ def with_kacha(text):
     return result
 
 
+def split_reply(text, *, max_segments=4):
+    """Split a chat reply into separate messages at 句号 / 换行.
+
+    她不会把一整段带句号的话塞进一条消息里：句号是分段符，不会出现在发出去
+    的文本里；换行同样分段。！？… 是语气，不额外拆，保留在句尾。
+    最多 ``max_segments`` 条，多出来的用逗号并进最后一条。
+    """
+    value = _clean_text(text, keep_lines=True)
+    segments = []
+    for chunk in re.split(r"[。\n]", value):
+        piece = chunk.strip(" ，,、\t")
+        if piece:
+            segments.append(piece)
+    if not segments:
+        return []
+    if len(segments) > max_segments:
+        head = segments[:max_segments - 1]
+        tail = "，".join(segments[max_segments - 1:])
+        segments = head + [tail]
+    return segments
+
+
 def usable_reply(text, *, min_len=4, max_len=90, keep_lines=False):
     """Reject empty / prompt-flavoured model output before it reaches the chat.
 

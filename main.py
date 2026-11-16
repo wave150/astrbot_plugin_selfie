@@ -1,4 +1,7 @@
-"""原创角色自拍插件（单实例单角色）。
+"""她的一天 · 角色生活自拍（单实例单角色）。
+
+不是生图插件：她住在一座真实城市里，有家、天气、每天的日程和临时事件，
+会按时间出门上班、吃饭、换装、睡觉，也会在自己生活的现场举起手机自拍。
 
 默认预设仍兼容旧角色：一个二次元少女；插件不内置任何城市数据
 - 自拍：第一人称手机前置摄像头视角（画面里不出现手机），白天在外、晚上在床上穿睡衣
@@ -2149,7 +2152,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 )
             else:
                 ack = f"我要 cos {cand['name']} 啦，等我换好给你拍张特写～"
-            await event.send(MessageChain([Plain(ack)]))
+            await self._send_reply(event, ack)
             self._generating = True
             self._spawn_task(self._do_closeup(
                 event, sender in self._admins(), sender, self._user_style(sender),
@@ -2165,7 +2168,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
         else:
             ack = f"我要 cos {cand['name']} 啦，等我换好🤳"
-        await event.send(MessageChain([Plain(ack)]))
+        await self._send_reply(event, ack)
         self._generating = True
         self._spawn_task(self._do_cosplay(event, sender, cand))
         return True
@@ -4024,7 +4027,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 f"好～衣柜里一共 {total} 套，随机到第 {pick_idx + 1} 套「{name}」，"
                 f"再随机配第 {cue.get('id')}/{cue_total} 条特写🤳"
             )
-        await event.send(MessageChain([Plain(ack)]))
+        await self._send_reply(event, ack)
         logger.info(
             f"[selfie] 随机衣服特写：衣柜 {total} 套 -> 第 {pick_idx + 1} 套「{name}」；"
             f"特写池 {cue_total} 条 -> 第 {cue.get('id')} 条"
@@ -4160,7 +4163,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
         else:
             ack = self._closeup_ack(False)
-        await event.send(MessageChain([Plain(ack)]))
+        await self._send_reply(event, ack)
         self._generating = True
         self._spawn_task(self._do_closeup(
             event, is_admin, sender, eff_style, removal, costume, cue,
@@ -4284,7 +4287,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 ack = self._costume_confirm_text(costume) + "～"
         else:
             ack = await self._interact_ack(event, action)
-        await event.send(MessageChain([Plain(ack)]))
+        await self._send_reply(event, ack)
         self._generating = True
         self._spawn_task(self._do_closeup(
             event, is_admin, sender, eff_style, removal, costume, cue,
@@ -4529,12 +4532,17 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             logger.warning(f"[selfie] 确认语生成失败，用内置短句: {e!r}")
         return self.rng.choice(fallback_pool) + "🤳"
 
+    async def _send_reply(self, event, text: str) -> None:
+        """按句号 / 换行拆成多条消息发出去（句号不出现在聊天里）。"""
+        for segment in dialogue.split_reply(text):
+            await event.send(MessageChain([Plain(segment)]))
+
     async def _send_ack(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
                         costume: dict | None = None,
                         scene_req: bool = False) -> None:
         text = await self._ack_text(event, style_override, removal, costume, scene_req)
-        await event.send(MessageChain([Plain(text)]))
+        await self._send_reply(event, text)
 
     async def _photo_caption(self, event, scene: dict, look: dict, *,
                              kind: str, cos_name: str = "") -> str:
@@ -4580,8 +4588,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             text = ""
         if not text:
             text = fallback_caption
-        await event.send(MessageChain([Plain(text)]))
-        return text
+        segments = dialogue.split_reply(text) or [text]
+        for segment in segments:
+            await event.send(MessageChain([Plain(segment)]))
+        # 存档保留完整意思；分段之间用逗号接起来，不带句号。
+        return "，".join(segments) if len(segments) > 1 else segments[0]
 
     @staticmethod
     def _look_caption(look: dict | None) -> str:
