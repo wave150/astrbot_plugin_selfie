@@ -165,6 +165,14 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 - `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
 - `test_main_boundaries.test_photo_action_priority_event_over_sleep_meal_then_default` 同步覆盖四种来源与顺序；总计 419 项通过。
 
+## v1.5.21 拟人化拍照对话（措辞层独立）
+
+- 新增 `selfie_core/dialogue.py`：完全不依赖 AstrBot 的措辞层。`KACHA`、`with_kacha()`（剥掉 🤳 与重复标记后把（咔嚓）固定在第一句末尾，句尾 ～/。/… 保留）、`clean_reply()`、`usable_reply()` / `usable_caption()`（长度与提示词味过滤）、`history_lines()`（解析会话历史的 OpenAI 消息列表，跳过 system/tool，图片记 `[图片]`）、`ack_prompts()` / `caption_prompts()`（接单与配文提示词）。
+- `main.py` 新增三个方法承接流程：`_conversation_snapshot()`（会话最近聊天 + persona_id）、`_persona_prompt()`（优先 `context.persona_manager.resolve_selected_persona()`，系统默认助手人格不当角色口吻；自定义角色再补 `character_*` 设定）、`_llm_text()`（统一单次文本调用与失败兜底）、`_natural_ack()`（接单：回应 + 第一句（咔嚓））、`_photo_caption()`（发图后的一句，过滤提示词味输出）、`_deliver_photo()`（图单独发 → 配文 → 返回存档配文）、`_natural_chat_enabled()`（读 `natural_chat`，默认 True）。
+- 发送路径改造：`_do_selfie()` / `_do_closeup()` / `_do_cosplay()` 统一走 `_deliver_photo()`；接单路径 `_send_ack()` / `_interact_ack()` / cos 确认 / 随机衣服特写都改走 `_natural_ack()`。旧行为（图片＋固定配文、短句 + 🤳）保留在 `natural_chat` 关闭时；模型不可用、超时、输出不合格时逐项退回旧文案，配文异常被 `_deliver_photo()` 单独接住，不影响已发出的图片。
+- 配置：`_conf_schema.json` 新增 `natural_chat`（bool，默认 true），`ack_llm` 说明同步为「第一句末尾（咔嚓）」。
+- 测试：`tests/test_dialogue.py`（(咔嚓) 定位/清洗/判重、历史解析、提示词内容）+ `test_main_boundaries` 新增 `_deliver_photo`（图独立发送、配文兜底、关闭开关回旧格式）、`_natural_ack`（回应文本、（咔嚓）位置、`ack_llm` 关闭时兜底）、`_photo_caption`（提示词味输出被拒）；总计 446 项通过。
+
 ## v1.5.20 动作覆写优先级、阶段名称与配文润色
 
 - `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。

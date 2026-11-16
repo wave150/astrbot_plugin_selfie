@@ -55,6 +55,7 @@ try:  # AstrBot package loader
     from .selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from .selfie_core.sleep import sleep_photo
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
+    from .selfie_core import dialogue
 except ImportError:  # direct local test import
     from selfie_core.defaults import *
     from selfie_core.defaults import _COSTUME_EXCLUDE, _COSTUME_RE, _COSTUME_HINT_PAT
@@ -78,6 +79,7 @@ except ImportError:  # direct local test import
     from selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from selfie_core.sleep import sleep_photo
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
+    from selfie_core import dialogue
 
 
 class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
@@ -1424,11 +1426,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             "tier": action, "kind": action,
         }
 
-    async def _interact_ack(self, action: str) -> str:
-        """接单话：因地制宜地答应让她摸摸 / 捏捏，结尾统一加 🤳。"""
+    async def _interact_ack(self, event, action: str) -> str:
+        """接单话：因地制宜地答应让她摸摸 / 捏捏。
+
+        拟人模式：像聊天一样回应，第一句末尾（咔嚓）；关掉则旧短句 + 🤳。
+        """
+        pool = INTERACT_ACK_FALLBACK.get(action) or ["好呀，我这就来"]
+        if self._natural_chat_enabled():
+            return await self._natural_ack(
+                event,
+                action_line=f"让对方{action}你一下，同时拍一张近距离特写",
+                fallback_pool=pool,
+            )
         if self._profile().is_custom:
             return await self._custom_character_text(f"用户请求{action}互动拍照，简短确认准备配合。", "好呀，稍等，我来配合这个动作～")
-        pool = INTERACT_ACK_FALLBACK.get(action) or ["好呀，我这就来"]
         text = ""
         if bool(self._cfg("ack_llm", True)):
             try:
@@ -2129,16 +2140,32 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         self._save_state()
         sender = str(event.get_sender_id())
         if mode == "closeup":
-            await event.send(MessageChain([
-                Plain(f"我要 cos {cand['name']} 啦，等我换好给你拍张特写～")
-            ]))
+            if self._natural_chat_enabled():
+                ack = await self._natural_ack(
+                    event,
+                    action_line=f"cos「{cand['name']}」，换好衣服后拍一张近距离特写",
+                    detail="对方刚确认要这个角色，你已经答应下来了。",
+                    fallback_pool=[f"我要 cos {cand['name']} 啦，等我换好给你拍张特写"],
+                )
+            else:
+                ack = f"我要 cos {cand['name']} 啦，等我换好给你拍张特写～"
+            await event.send(MessageChain([Plain(ack)]))
             self._generating = True
             self._spawn_task(self._do_closeup(
                 event, sender in self._admins(), sender, self._user_style(sender),
                 None, None, cue, cand,
             ))
             return True
-        await event.send(MessageChain([Plain(f"我要 cos {cand['name']} 啦，等我换好🤳")]))
+        if self._natural_chat_enabled():
+            ack = await self._natural_ack(
+                event,
+                action_line=f"cos「{cand['name']}」，换好衣服后拍一张自拍",
+                detail="对方刚确认要这个角色，你已经答应下来了。",
+                fallback_pool=[f"我要 cos {cand['name']} 啦，等我换好"],
+            )
+        else:
+            ack = f"我要 cos {cand['name']} 啦，等我换好🤳"
+        await event.send(MessageChain([Plain(ack)]))
         self._generating = True
         self._spawn_task(self._do_cosplay(event, sender, cand))
         return True
@@ -2162,7 +2189,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             look = self._cosplay_look(cos_name, costume_desc)
             img = await self._generate_cosplay(scene, model, style, look, cand)
             caption = f"给你～我 cos 的 {cos_name}（{self._scene_caption_tail(scene)}）"
-            await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
+            caption = await self._deliver_photo(
+                event, img, scene=scene, look=look, kind="cos 照片",
+                cos_name=cos_name, fallback_caption=caption,
+            )
             entry = self._save_selfie(
                 img, scene, look, str(getattr(event, "unified_msg_origin", "") or ""),
                 sender, caption, source="cos",
@@ -2275,7 +2305,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             look_phrase = self._look_caption(look) if not cos_name else ""
             if look_phrase:
                 caption = f"给你～（{tag}，{self._scene_caption_tail(scene)}，{look_phrase}）"
-            await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
+            caption = await self._deliver_photo(
+                event, img, scene=scene, look=look,
+                kind=(f"对方{kind_name}你时的近距离特写" if kind_name else "近距离特写"),
+                cos_name=cos_name, fallback_caption=caption,
+            )
             if kind_name:
                 source = "interact_cos" if cos_name else "interact"
             else:
@@ -3978,10 +4012,19 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             return True
         cue_total = int(cue.get("total") or 0)
 
-        await event.send(MessageChain([Plain(
-            f"好～衣柜里一共 {total} 套，随机到第 {pick_idx + 1} 套「{name}」，"
-            f"再随机配第 {cue.get('id')}/{cue_total} 条特写🤳"
-        )]))
+        if self._natural_chat_enabled():
+            ack = await self._natural_ack(
+                event,
+                action_line=f"用「{name}」这套衣服拍一张近距离特写",
+                detail=f"你刚从衣柜里随手抽到「{name}」这套衣服，准备换上去拍一张特写（别报编号和条数）",
+                fallback_pool=[f"好～我抽到「{name}」这套，等我换上去拍一张"],
+            )
+        else:
+            ack = (
+                f"好～衣柜里一共 {total} 套，随机到第 {pick_idx + 1} 套「{name}」，"
+                f"再随机配第 {cue.get('id')}/{cue_total} 条特写🤳"
+            )
+        await event.send(MessageChain([Plain(ack)]))
         logger.info(
             f"[selfie] 随机衣服特写：衣柜 {total} 套 -> 第 {pick_idx + 1} 套「{name}」；"
             f"特写池 {cue_total} 条 -> 第 {cue.get('id')} 条"
@@ -4097,9 +4140,27 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         eff_style = style_override or self._user_style(sender)
         if costume:
             # 换装：统一回「我去找一件xxx，你要的是这个对吧」，方便对方一眼纠错
-            await event.send(MessageChain([Plain(self._costume_confirm_text(costume) + "～")]))
+            if self._natural_chat_enabled():
+                ack = await self._natural_ack(
+                    event,
+                    action_line=f"换成「{costume.get('name') or '那套衣服'}」再拍一张近距离特写",
+                    detail=(
+                        f"你要说出这套衣服的名字「{costume.get('name') or '那套衣服'}」，"
+                        "方便对方一眼纠错"
+                    ),
+                    fallback_pool=[self._costume_confirm_text(costume) + "～"],
+                )
+            else:
+                ack = self._costume_confirm_text(costume) + "～"
+        elif self._natural_chat_enabled():
+            ack = await self._natural_ack(
+                event,
+                action_line="拍一张近距离特写（画外相机视角）",
+                fallback_pool=list(CLOSEUP_ACK_FALLBACK),
+            )
         else:
-            await event.send(MessageChain([Plain(self._closeup_ack(False))]))
+            ack = self._closeup_ack(False)
+        await event.send(MessageChain([Plain(ack)]))
         self._generating = True
         self._spawn_task(self._do_closeup(
             event, is_admin, sender, eff_style, removal, costume, cue,
@@ -4206,11 +4267,24 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
         eff_style = style_override or self._user_style(sender)
         if costume:
-            await event.send(MessageChain([
-                Plain(self._costume_confirm_text(costume) + "～")
-            ]))
+            if self._natural_chat_enabled():
+                ack = await self._natural_ack(
+                    event,
+                    action_line=(
+                        f"换成「{costume.get('name') or '那套衣服'}」，"
+                        f"再让对方{action}你一下、拍一张近距离特写"
+                    ),
+                    detail=(
+                        f"你要说出这套衣服的名字「{costume.get('name') or '那套衣服'}」，"
+                        "方便对方一眼纠错"
+                    ),
+                    fallback_pool=[self._costume_confirm_text(costume) + "～"],
+                )
+            else:
+                ack = self._costume_confirm_text(costume) + "～"
         else:
-            await event.send(MessageChain([Plain(await self._interact_ack(action))]))
+            ack = await self._interact_ack(event, action)
+        await event.send(MessageChain([Plain(ack)]))
         self._generating = True
         self._spawn_task(self._do_closeup(
             event, is_admin, sender, eff_style, removal, costume, cue,
@@ -4219,7 +4293,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return True
 
     # ------------------------------------------------------------------
-    # 接单确认语：由大模型生成，结尾统一加 🤳
+    # 拟人化拍照对话：接单 / 出图 / 配文都交给大模型按人格和上下文包装
+    # （关闭 natural_chat 时退回「短句 + 🤳」和「图片＋固定配文」的旧行为）
     # ------------------------------------------------------------------
     ACK_FALLBACK = {
         STYLE_ANIME: ["马上给你拍张二次元的", "等我摆个二次元姿势", "好呀，这就去拍"],
@@ -4235,10 +4310,160 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         "出门行程我自己定啦，就在现在这儿拍一张～",
     ]
 
-    async def _ack_text(self, style_override: str | None,
+    def _natural_chat_enabled(self) -> bool:
+        """拟人化拍照对话开关（默认开）：图单独发，她用自己语气回应和补一句。"""
+        return bool(self._cfg("natural_chat", True))
+
+    async def _conversation_snapshot(self, event):
+        """(当前会话最近的聊天行, 对话的 persona_id)；拿不到就空，不影响出图。"""
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        manager = getattr(self.context, "conversation_manager", None)
+        if not umo or manager is None:
+            return [], None
+        try:
+            cid = await manager.get_curr_conversation_id(umo)
+            if not cid:
+                return [], None
+            conversation = await manager.get_conversation(umo, cid)
+        except Exception:
+            return [], None
+        return (
+            dialogue.history_lines(getattr(conversation, "history", "[]")),
+            getattr(conversation, "persona_id", None),
+        )
+
+    async def _persona_prompt(self, event=None,
+                              conversation_persona: str | None = None) -> str:
+        """当前人格设定：优先 AstrBot 人格，自定义原创角色再补上角色设定。"""
+        persona = ""
+        manager = getattr(self.context, "persona_manager", None)
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if manager is not None and umo:
+            try:
+                platform = str(
+                    getattr(event, "get_platform_name", lambda: "")() or umo.split(":")[0]
+                )
+                _pid, selected, _forced, _web = await manager.resolve_selected_persona(
+                    umo=umo,
+                    conversation_persona_id=conversation_persona,
+                    platform_name=platform,
+                )
+                text = str((selected or {}).get("prompt") or "").strip()
+                # 系统默认人格是通用助手，拿来当角色口吻只会更机械，按没有处理。
+                if text and not text.startswith("You are a helpful"):
+                    persona = text
+            except Exception:
+                persona = ""
+        profile = self._profile()
+        extra = ""
+        if profile.is_custom:
+            bits = [f"你扮演的角色是「{profile.name or '参考图角色'}」。"]
+            if profile.description:
+                bits.append(f"角色设定：{profile.description}")
+            if profile.hair:
+                bits.append(f"你的发型和发色：{profile.hair}")
+            if profile.voice:
+                bits.append(f"说话的口气：{profile.voice}")
+            extra = "".join(bits)
+        if not persona:
+            persona = extra or (
+                "你是小汉堡，一个热爱自拍的二次元少女，爱吃汉堡，"
+                "有点憨萌，说话像十几岁女生，自然、口语、可爱，不油腻。"
+            )
+        elif extra:
+            persona = persona + "\n" + extra
+        return persona[:1200]
+
+    async def _llm_text(self, system_prompt: str, prompt: str, *,
+                        timeout: float = 10) -> str:
+        """问一次对话大模型；没配、超时、报错都返回空串，由调用方兜底。"""
+        try:
+            provider = self.context.get_using_provider()
+        except Exception:
+            provider = None
+        if provider is None:
+            return ""
+        try:
+            resp = await asyncio.wait_for(
+                provider.text_chat(system_prompt=system_prompt, prompt=prompt), timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[selfie] 拟人回复生成失败，用兜底文案: {e!r}")
+            return ""
+        return str(getattr(resp, "completion_text", "") or "")
+
+    async def _natural_ack(self, event, *, action_line: str, detail: str = "",
+                           fallback_pool=None, style_override: str | None = None,
+                           scene_req: bool = False, costume: dict | None = None,
+                           removal: dict | None = None) -> str:
+        """拟人化接单：先像聊天一样回应对方，第一句话末尾是（咔嚓）。"""
+        pool = fallback_pool or self.ACK_FALLBACK.get(
+            style_override, self.ACK_FALLBACK_DEFAULT
+        )
+        if not bool(self._cfg("ack_llm", True)):
+            return dialogue.with_kacha(self.rng.choice(pool))
+        history, conversation_persona = await self._conversation_snapshot(event)
+        try:
+            scene = await self._get_scene()
+        except Exception:
+            scene = None
+        hints = []
+        if scene_req:
+            hints.append(
+                "对方想让你换个地方拍，你要婉拒：说清楚今天去哪儿是你自己安排的，"
+                "然后就按你现在的地方拍。"
+            )
+        if costume:
+            hints.append(
+                f"对方点名叫你换装成「{costume.get('name') or '那套衣服'}」，"
+                "你要先答应去翻衣柜换，不要直接说已经拍好。"
+            )
+        if removal and removal.get("hat_off"):
+            hints.append("对方还让你把帽子摘掉，可以顺口答应。")
+        if removal and removal.get("coat_off"):
+            hints.append("对方还让你把外套脱掉，可以顺口答应。")
+        if style_override == STYLE_ANIME:
+            hints.append("对方点名要二次元动漫画风，可以顺口提一句。")
+        elif style_override == STYLE_REALISTIC:
+            hints.append("对方点名要写实真人画风，可以顺口提一句。")
+        system, prompt = dialogue.ack_prompts(
+            persona=await self._persona_prompt(event, conversation_persona),
+            user_text=self._clean_text(event) if event is not None else "",
+            scene_line=self._scene_caption_tail(scene) if isinstance(scene, dict) else "",
+            action_line=action_line,
+            detail="".join([detail] + hints),
+            history=history,
+        )
+        text = dialogue.usable_reply(await self._llm_text(system, prompt),
+                                     keep_lines=True)
+        if text:
+            return dialogue.with_kacha(text)
+        return dialogue.with_kacha(self.rng.choice(pool))
+
+    async def _ack_text(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
                         costume: dict | None = None,
                         scene_req: bool = False) -> str:
+        """接单话。拟人模式：正常回应 + 第一句（咔嚓）；关掉则旧短句 + 🤳。"""
+        if self._natural_chat_enabled():
+            action_line = "拍一张自拍（手机前置摄像头、第一人称视角）"
+            fallback_pool = self.ACK_FALLBACK.get(style_override, self.ACK_FALLBACK_DEFAULT)
+            if costume:
+                action_line = (
+                    f"先去找「{costume.get('name') or '那套衣服'}」换上，再拍一张自拍"
+                )
+                # 换装兜底仍要报出衣服名字，方便对方一眼纠错
+                fallback_pool = [self._costume_confirm_text(costume) + "～"]
+            elif scene_req:
+                fallback_pool = self.SCENE_ACK_FALLBACK
+            return await self._natural_ack(
+                event, action_line=action_line, style_override=style_override,
+                scene_req=scene_req, costume=costume, removal=removal,
+                fallback_pool=fallback_pool,
+            )
+        # ---- 以下是关闭拟人化后的旧行为，保持原样 ----
         if self._profile().is_custom:
             text = await self._custom_character_text("用户请求拍照，请简短确认正在准备拍照，不要说已经拍好。", "好，稍等，我按当前场景拍一张给你看～")
             return text.rstrip("🤳 ") + "🤳"
@@ -4248,15 +4473,15 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if costume:
             # 换装：固定回「我去找一件xxx，你要的是这个对吧」，
             # 让用户能直接看出模型把你说的衣服认成了哪一套（认错了一眼就能纠正）
-            return self._costume_confirm_text(costume)
+            return self._costume_confirm_text(costume) + "🤳"
         if scene_req:
             fallback_pool = self.SCENE_ACK_FALLBACK
         if not bool(self._cfg("ack_llm", True)):
-            return self.rng.choice(fallback_pool)
+            return self.rng.choice(fallback_pool) + "🤳"
         try:
             provider = self.context.get_using_provider()
             if provider is None:
-                return self.rng.choice(fallback_pool)
+                return self.rng.choice(fallback_pool) + "🤳"
             if style_override == STYLE_ANIME:
                 style_hint = "对方还点名要这张用二次元动漫画风，可以顺口提一句。"
             elif style_override == STYLE_REALISTIC:
@@ -4299,17 +4524,64 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             text = re.sub(r"[🤳📸✨😀-🙏\U0001F300-\U0001FAFF]+", "", text).strip()
             text = text.strip("。！!～~ ")
             if text and 2 <= len(text) <= 40:
-                return text
+                return text + "🤳"
         except Exception as e:
             logger.warning(f"[selfie] 确认语生成失败，用内置短句: {e!r}")
-        return self.rng.choice(fallback_pool)
+        return self.rng.choice(fallback_pool) + "🤳"
 
     async def _send_ack(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
                         costume: dict | None = None,
                         scene_req: bool = False) -> None:
-        text = await self._ack_text(style_override, removal, costume, scene_req)
-        await event.send(MessageChain([Plain(text + "🤳")]))
+        text = await self._ack_text(event, style_override, removal, costume, scene_req)
+        await event.send(MessageChain([Plain(text)]))
+
+    async def _photo_caption(self, event, scene: dict, look: dict, *,
+                             kind: str, cos_name: str = "") -> str:
+        """图发出去之后她顺口补的一句：用自己的话说明照片里在干什么。"""
+        history, conversation_persona = await self._conversation_snapshot(event)
+        doing_line = str((scene or {}).get("activity") or "").strip()
+        if len(doing_line) > 24:
+            # 事件动作正文是长篇生图提示词，不能当聊天素材喂给模型。
+            doing_line = ""
+        look_name = str((look or {}).get("name") or "").strip()
+        if len(look_name) > 16:
+            look_name = ""
+        system, prompt = dialogue.caption_prompts(
+            persona=await self._persona_prompt(event, conversation_persona),
+            kind=kind,
+            scene_line=self._scene_caption_tail(scene) if isinstance(scene, dict) else "",
+            doing_line=doing_line,
+            look_line=look_name,
+            cos_name=cos_name,
+            user_text=self._clean_text(event) if event is not None else "",
+            history=history,
+        )
+        return dialogue.usable_caption(await self._llm_text(system, prompt, timeout=9))
+
+    async def _deliver_photo(self, event, img: bytes, *, scene: dict, look: dict,
+                             kind: str, fallback_caption: str,
+                             cos_name: str = "") -> str:
+        """发一张照片，返回要存档的配文。
+
+        拟人模式：图片单独发（不带任何文字），再用大模型按人格和聊天上下文
+        补一句「她正在干什么」；模型不可用时退回原来的固定配文。
+        """
+        if not self._natural_chat_enabled():
+            await event.send(MessageChain([Image.fromBytes(img), Plain(fallback_caption)]))
+            return fallback_caption
+        await event.send(MessageChain([Image.fromBytes(img)]))
+        try:
+            text = await self._photo_caption(
+                event, scene, look, kind=kind, cos_name=cos_name,
+            )
+        except Exception as e:
+            logger.warning(f"[selfie] 照片配文生成失败，用兜底配文: {e!r}")
+            text = ""
+        if not text:
+            text = fallback_caption
+        await event.send(MessageChain([Plain(text)]))
+        return text
 
     @staticmethod
     def _look_caption(look: dict | None) -> str:
@@ -4359,7 +4631,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             look_phrase = self._look_caption(look)
             if look_phrase:
                 caption = f"给你～（{self._scene_caption_tail(scene)}，{look_phrase}）"
-            await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
+            caption = await self._deliver_photo(
+                event, img, scene=scene, look=look, kind="自拍",
+                fallback_caption=caption,
+            )
             entry = self._save_selfie(
                 img, scene, look,
                 getattr(event, "unified_msg_origin", ""),
