@@ -12,7 +12,8 @@ from datetime import date, datetime, time, timedelta
 import math
 import re
 from .event_materials import (
-    action_name, action_name_for_text, event_label, summarize_action, usable_action_text,
+    action_name, action_name_for_text, activity_phrase, event_label, phase_label,
+    scene_name, summarize_action, usable_action_text,
 )
 from .overnight import pick_overnight
 
@@ -172,6 +173,10 @@ def validate_event(event):
             raise ValueError('outfit must be text or object')
         if 'action' in part and not isinstance(part['action'], str):
             raise ValueError('action must be text')
+        if 'phase_name' in part:
+            name = part['phase_name']
+            if not isinstance(name, str) or len(name) > 24 or any(ord(ch) < 32 for ch in name):
+                raise ValueError('phase name must be a short single-line string')
         _validate_pools(part, is_phase=index > 0, phase_index=index - 1)
     if 'end_scene' in e and not isinstance(e['end_scene'], (str, dict)):
         raise ValueError('end_scene must be text or object')
@@ -227,7 +232,7 @@ class LivingEngine:
     def record(self, now, scene):
         """Record only a scene actually emitted/observed, once per hour+content."""
         rows = self.state['records'].setdefault(now.date().isoformat(), [])
-        row = {k: deepcopy(scene[k]) for k in ('city', 'district', 'activity', 'type', 'event_id', 'living_phase', 'meal', 'room') if k in scene}
+        row = {k: deepcopy(scene[k]) for k in ('city', 'district', 'activity', 'type', 'event_id', 'living_phase', 'meal', 'room', 'phase_index', 'phase_name', 'place') if k in scene}
         row['at'] = now.isoformat()
         fingerprint = dict(row, at=now.replace(minute=0, second=0, microsecond=0).isoformat())
         for old in rows:
@@ -246,13 +251,27 @@ class LivingEngine:
         text = str(record.get('activity') or '').strip()
         if not text:
             return text
+        # 观察记录里如果已经记了阶段名称/地点，直接用（新记录）。
+        name = str(record.get('phase_name') or '').strip()
+        if name:
+            return activity_phrase(name)
+        place = str(record.get('place') or '').strip()
+        if place:
+            return f"在{place}"
         if len(text) <= 24:
             return text
         event = events_by_id.get(str(record.get('event_id') or ''))
         if isinstance(event, dict):
-            for part in [event] + list(event.get('phases') or []):
+            phases = list(event.get('phases') or [])
+            index = record.get('phase_index')
+            part = phases[index] if type(index) is int and 0 <= index < len(phases) else {}
+            label = scene_name(event, part)
+            if label:
+                return activity_phrase(label)
+            for part in [event] + phases:
                 if isinstance(part, dict) and str(part.get('action') or '').strip() == text:
-                    return action_name(event, part)
+                    label = scene_name(event, part)
+                    return activity_phrase(label) if label else action_name(event, part)
             name = str(event.get('name') or '').strip()
             if name:
                 return event_label(event)
@@ -296,9 +315,13 @@ class LivingEngine:
             common = dict(event_id=event['id'], city=event['city'], district=event['district'])
             add(start - timedelta(hours=1), start, '准备：' + event_label(event), **common)
             for index, phase in enumerate(event.get('phases') or [{'start': 0, 'end': event['duration']}]):
-                # 日程只写概括（动作素材的短名字），不把生图提示词整段搬进来。
+                # 日程只写概括：阶段名称 > 阶段场景名 > 动作短名/事件名，不搬生图提示词。
+                name = phase_label(phase)
+                place = scene_name(event, phase)
                 add(start + timedelta(hours=phase['start']), start + timedelta(hours=phase['end']),
-                    action_name(event, phase) or event.get('name', event['id']),
+                    activity_phrase(name) if name else
+                    activity_phrase(place) if place else
+                    (action_name(event, phase) or event.get('name', event['id'])),
                     phase_index=index, **common)
             if event.get('end_scene_enabled', True):
                 add(end, end + timedelta(hours=1), event_label(event) + '结束后场景', phase_index=-2, **common)
@@ -435,7 +458,9 @@ class LivingEngine:
         # 动作正文是长篇生图提示词：activity 只放短名字（用来写日程和照片文案），
         # 完整正文单独放进 event_action，自拍时用它顶替「伸手自拍」的默认动作。
         action_text = str(part.get('action') or e.get('action') or '').strip()
-        scene.setdefault('activity', action_name(e, part) or e.get('name') or e['id'])
+        # 阶段名称（用户在事件编辑里手写或 AI 总结）优先：日程/配文都从它取。
+        label = phase_label(part)
+        scene.setdefault('activity', label or action_name(e, part) or e.get('name') or e['id'])
         if phase == 'active' and action_text:
             scene['event_action'] = action_text
         if phase == 'prepare':
@@ -453,6 +478,13 @@ class LivingEngine:
             scene['outfit'] = deepcopy(outfit)
         scene.update(city=e['city'], district=e['district'], event_id=e['id'], living_phase=phase,
                      phase_index=-2 if phase == 'end' else phase_index, home=False)
+        # 事件场景在素材库里的短名字（如「手机组装车间」）：配文/日程用它，比事件标题自然。
+        if phase == 'active':
+            if label:
+                scene['phase_name'] = label
+            place = scene_name(e, part)
+            if place:
+                scene.setdefault('place', place)
         return scene
 
     def scene(self, now, *, city, district, home_city, home_district,

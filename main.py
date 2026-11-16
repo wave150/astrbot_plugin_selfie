@@ -52,7 +52,7 @@ try:  # AstrBot package loader
     from .selfie_core.scene_context import scene_context_text, local_datetime
     from .selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from .selfie_core.living import photo_variation
-    from .selfie_core.event_materials import action_name, active_event
+    from .selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from .selfie_core.sleep import sleep_photo
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 except ImportError:  # direct local test import
@@ -75,7 +75,7 @@ except ImportError:  # direct local test import
     from selfie_core.scene_context import scene_context_text, local_datetime
     from selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from selfie_core.living import photo_variation
-    from selfie_core.event_materials import action_name, active_event
+    from selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from selfie_core.sleep import sleep_photo
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
 
@@ -2161,7 +2161,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
             look = self._cosplay_look(cos_name, costume_desc)
             img = await self._generate_cosplay(scene, model, style, look, cand)
-            caption = f"给你～我 cos 的 {cos_name}（在{scene.get('activity', '')}）"
+            caption = f"给你～我 cos 的 {cos_name}（{self._scene_caption_tail(scene)}）"
             await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
             entry = self._save_selfie(
                 img, scene, look, str(getattr(event, "unified_msg_origin", "") or ""),
@@ -2272,8 +2272,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             base_tag = kind_name or "特写"
             tag = f"{base_tag}·cos {cos_name}" if cos_name else base_tag
             caption = f"给你～（{tag}，{self._scene_caption_tail(scene)}）"
-            if (not cos_name) and look.get("caption"):
-                caption = f"给你～（{tag}，{self._scene_caption_tail(scene)}，{look['caption']}）"
+            look_phrase = self._look_caption(look) if not cos_name else ""
+            if look_phrase:
+                caption = f"给你～（{tag}，{self._scene_caption_tail(scene)}，{look_phrase}）"
             await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
             if kind_name:
                 source = "interact_cos" if cos_name else "interact"
@@ -2840,18 +2841,27 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         event = active.get("event")
         if not isinstance(event, dict) or str(event.get("id")) != event_id:
             return scene, ""
+        phases = event.get("phases") if isinstance(event.get("phases"), list) else []
+        index = scene.get("phase_index")
+        part = phases[index] if type(index) is int and 0 <= index < len(phases) else {}
+        phase_name = phase_label(part)
         try:
             picked, action, label = photo_variation(event, scene.get("phase_index"), self.rng)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[selfie] 事件随机池抽取失败，按主素材拍: {e!r}")
             return scene, ""
         variant = dict(scene)
+        if phase_name:
+            variant["phase_name"] = phase_name
         if isinstance(picked, dict):
             text = str(picked.get("text") or "").strip()
             name = str(picked.get("name") or "").strip()
             if text:
                 variant["desc"] = text
                 variant["scene_variant"] = name
+                place = scene_label(picked)
+                if place:
+                    variant["place"] = place
                 extra = picked.get("scene")
                 if isinstance(extra, dict):
                     for key in ("type", "tags", "room"):
@@ -2859,25 +2869,36 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                             variant[key] = extra[key]
         if not action:
             # 没有动作随机池的事件：用当前阶段的主动作正文，保证事件动作照样顶替自拍姿势。
-            phases = event.get("phases") if isinstance(event.get("phases"), list) else []
-            index = scene.get("phase_index")
-            part = phases[index] if type(index) is int and 0 <= index < len(phases) else {}
             action = str((part or {}).get("action") or event.get("action") or "").strip()
             if action:
                 label = action_name(event, part or event)
         if action:
             variant["event_action"] = action
-            variant["activity"] = label or str(variant.get("activity") or "")
+            variant["activity"] = phase_name or label or str(variant.get("activity") or "")
         return variant, action
 
     def _photo_action(self, scene, expression, gesture, night_kind=""):
         """唯一决定「谁顶替默认自拍动作」的地方。
 
-        优先级：睡觉（00:30 后）> 吃饭/做饭 > 事件当前动作 > 默认自拍。
+        优先级：事件当前动作 > 睡觉 / 吃饭（平级，本身不冲突）> 默认自拍。
         睡觉、吃饭、事件都只发这一套动作，不会再和「伸手自拍」叠在一起；
         自定义角色走同一个判断，只把 ``custom_text`` 追加到它自己的提示词后面。
         """
         scene = scene if isinstance(scene, dict) else {}
+        # 事件进行中时事件动作优先：正在厂里拧螺丝，就不该按「睡觉」或「吃饭」画。
+        event_action = str(scene.get("event_action") or "").strip()
+        if event_action:
+            return {
+                "source": "event",
+                "intro": "一张 9:16 竖屏照片，记录她此刻正在做的事：",
+                "framing": "",
+                "pose": ("这一张的动作、机位和景别完全按下面这段来，"
+                         f"不要再画成伸手自拍：{event_action}；"),
+                "face_line": "",
+                "light_line": "",
+                "tail": "",
+                "custom_text": "这一张的动作与机位（务必照做）：" + event_action,
+            }
         if night_kind:
             return sleep_photo(night_kind, expression)
         meal = meal_photo(scene, self.rng)
@@ -2891,19 +2912,6 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "light_line": "",
                 "tail": meal["tail"],
                 "custom_text": "这一张的动作与画面要求：" + meal_text(meal),
-            }
-        event_action = str(scene.get("event_action") or "").strip()
-        if event_action:
-            return {
-                "source": "event",
-                "intro": "一张 9:16 竖屏照片，记录她此刻正在做的事：",
-                "framing": "竖屏照片构图（记录她此刻正在做的事）：",
-                "pose": ("这一张的动作、机位和景别完全按下面这段来，"
-                         f"不要再画成伸手自拍：{event_action}；"),
-                "face_line": "",
-                "light_line": "",
-                "tail": "",
-                "custom_text": "这一张的动作与机位（务必照做）：" + event_action,
             }
         return {
             "source": "default",
@@ -4303,6 +4311,16 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         text = await self._ack_text(style_override, removal, costume, scene_req)
         await event.send(MessageChain([Plain(text + "🤳")]))
 
+    @staticmethod
+    def _look_caption(look: dict | None) -> str:
+        """照片配文里的穿着短句：「防尘工装」→「穿防尘工装」。"""
+        text = str((look or {}).get("caption") or "").strip()
+        if not text:
+            return ""
+        if text.startswith(("穿", "是", "戴", "着", "披")):
+            return text
+        return "穿" + text
+
     async def _do_selfie(self, event: AstrMessageEvent, is_admin: bool,
                          style_override: str | None = None,
                          removal: dict | None = None,
@@ -4338,8 +4356,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     model, style, look.get("negative_extra"),
                 )
             caption = f"给你～（{self._scene_caption_tail(scene)}）"
-            if look.get("caption"):
-                caption = f"给你～（{self._scene_caption_tail(scene)}，{look['caption']}）"
+            look_phrase = self._look_caption(look)
+            if look_phrase:
+                caption = f"给你～（{self._scene_caption_tail(scene)}，{look_phrase}）"
             await event.send(MessageChain([Image.fromBytes(img), Plain(caption)]))
             entry = self._save_selfie(
                 img, scene, look,

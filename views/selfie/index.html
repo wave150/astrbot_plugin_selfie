@@ -1333,15 +1333,20 @@
     return "";
   }
 
-  async function applyGeneratedFragment(fieldLabel, field, apply, btn) {
+  async function applyGeneratedFragment(fieldLabel, field, apply, btn, context) {
     var requirement = await askFragmentRequirement(fieldLabel);
     if (requirement === null) return;
+    if (context) {
+      requirement = str(context) + (str(requirement).trim()
+        ? "；用户补充要求：" + str(requirement).trim() : "");
+    }
     var result = await runFragmentJob(field, requirement, btn);
     if (result === null) return;
     var generated = extractFragmentText(result);
     if (!str(generated).trim()) { toast("后端没有返回可用的文本", "err"); return; }
     var targetHint = field === "action" ? "动作目标至少 500 字"
       : (field === "costume" ? "服装格式为「名称 | 别名 | 服装描述」"
+        : field === "phase_name" ? "阶段名称 6–12 字，写清这个阶段在做什么/在哪"
         : "场景/结束场景目标至少 200 字");
     var values = await openEditorModal({
       title: fieldLabel + " · 编辑生成结果",
@@ -5655,6 +5660,47 @@
       remove.setAttribute("data-si", String(index));
       head.appendChild(remove);
       card.appendChild(head);
+
+      // 阶段名称：日程和自拍配文优先用它；可以手写，也可以让 AI 按本阶段素材总结。
+      var nameRow = el("div", "field-label-row");
+      nameRow.appendChild(el("span", "field-label", "阶段名称"));
+      var phaseName = inputText(str(phase.phase_name || ""), "例如：流水线组装 / 商场中庭闲逛");
+      phaseName.setAttribute("data-phase", String(index));
+      phaseName.setAttribute("data-field", "phase_name");
+      phaseName.maxLength = 24;
+      nameRow.appendChild(phaseName);
+      var nameAiBtn = el("button", "btn btn-ghost btn-mini ai-btn", "AI 总结");
+      nameAiBtn.type = "button";
+      nameAiBtn.addEventListener("click", function () {
+        var sceneNames = eventSceneIds(phase).map(function (id) {
+          var row = ((event.materials || {}).scenes || []).filter(function (item) {
+            return str(item.id) === str(id);
+          })[0];
+          return row ? str(row.name) : "";
+        }).filter(Boolean);
+        var actionNames = eventActionRefs(phase).map(function (ref) {
+          var value = eventRefValue(ref);
+          if (!value) return "";
+          var rows = value.source === "global" ? (state.materials.closeup || [])
+            : ((event.materials || {}).actions || []);
+          var row = rows.filter(function (item) { return str(item.id) === value.id; })[0];
+          return row ? str(row.name || truncate(str(row.text), 20)) : "";
+        }).filter(Boolean);
+        var context = "事件名称：" + str(event.name) + "；阶段 " + (index + 1)
+          + "/" + event.phases.length + "，时间偏移 " + round2(phase.start) + "-"
+          + round2(phase.end) + " 小时；阶段场景：" + (sceneNames.join("、") || "未选")
+          + "；阶段动作：" + (actionNames.join("、") || "未选");
+        applyGeneratedFragment("阶段名称", "phase_name", function (text) {
+          var name = str(text).replace(/\s+/g, "").slice(0, 24);
+          phase.phase_name = name;
+          phaseName.value = name;
+          markEventsDirty();
+        }, nameAiBtn, context);
+      });
+      nameRow.appendChild(nameAiBtn);
+      card.appendChild(nameRow);
+      card.appendChild(el("div", "field-hint",
+        "阶段名称会用于日程和自拍配文（6–12 字最好）；可手写，也可以点「AI 总结」按本阶段的场景/动作生成。"));
 
       var poolEntries = poolEntriesFor(event);
 

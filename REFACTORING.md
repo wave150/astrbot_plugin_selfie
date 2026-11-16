@@ -160,6 +160,19 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 5. 若旧版确实无法读取新 runtime，先保留最新副本，再单独评估并恢复必要运行数据。**恢复完整旧 runtime 会失去备份之后的活动与新照片记录**；这是数据回退，不是无损操作。custom namespace 在旧版中可能不可见，保留它们等待迁移，不要删除。
 6. 核查代码、配置与运行目录对应关系后启动，先检查日志/状态读取，不要立即触发付费生图或空间发布。发现不兼容则停止并从刚保存的当前副本恢复，另行处理迁移。
 
+## v1.5.20 动作覆写优先级修正
+
+- `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
+- `test_main_boundaries.test_photo_action_priority_event_over_sleep_meal_then_default` 同步覆盖四种来源与顺序；总计 419 项通过。
+
+## v1.5.20 动作覆写优先级、阶段名称与配文润色
+
+- `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
+- 事件阶段新增可选 `phase_name`（与事件 `name` 区分，避免合并 dict 时撞名）：`event_materials.normalize_phase_name()` 清洗单行/限长 24 字，`phase_label()` 读取；`living.validate_event()` 校验类型和长度；`workspace.save_events()` 保存前清洗；`generate_event_fragment` 新增 `phase_name` 字段（6–12 字短名，AI 总结用）。
+- 优先级取值链：阶段名称 → 阶段场景短名（`scene_label()`：素材 name 不可读时从场景描述前半句提取）→ 动作/事件短名。日程计划项、观察记录、自拍配文共用这条链；`record()` 额外保存 `phase_index`/`phase_name`/`place`。
+- `world._scene_caption_tail()` 增加配文润色：有阶段名称用「在流水线组装」，有场景短名用「在电子厂公司食堂」，事件标题兜底时不加「在」；`main._look_caption()` 把穿着写成「穿防尘工装」。
+- 测试：阶段名称校验/清洗/AI 摘要、`scene_label`/`event_label` 去修饰、配文润色、优先级；总计 424 项通过。
+
 ## v1.5.19 统一动作覆写与事件 active 结构修复
 
 - `event_materials.active_event(state)`：统一读取当前事件计划（优先 `state['living']['active']`，兼容旧版顶层 `state['active']`）。此前 `main._event_photo_scene()` 与 `world._scene_reusable()` 都直接读顶层 `state['active']`，运行时永远拿不到 active，导致事件动作不生效、配文沿用旧缓存里的长提示词。

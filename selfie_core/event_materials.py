@@ -10,6 +10,20 @@ import json
 
 FIELDS = {'scene': 'scenes', 'end_scene': 'scenes', 'outfit': 'outfits', 'action': 'actions'}
 OUTFIT_MODES = ('fixed', 'event', 'inherit')
+PHASE_NAME_LIMIT = 24
+
+
+def normalize_phase_name(value):
+    """阶段名称清理：单行、去首尾空白、压掉多余空格、限长 24 字。"""
+    text = str(value or "").replace("\r", " ").replace("\n", " ")
+    text = " ".join(text.split())
+    return text[:PHASE_NAME_LIMIT]
+
+
+def phase_label(part):
+    """阶段名称（用户手写或 AI 总结）；日程与照片配文优先用它。"""
+    part = part if isinstance(part, dict) else {}
+    return normalize_phase_name(part.get("phase_name"))
 
 
 def _check_shape(event):
@@ -143,6 +157,37 @@ def active_event(state):
     return active if isinstance(active, dict) else {}
 
 
+_NO_IN_ACTIVITY = ("在", "去", "准备", "裹着", "刚", "正", "已经", "洗", "睡", "换",
+                   "躺", "坐", "回", "要", "想")
+
+
+def activity_phrase(text):
+    """把活动/地点短名变成自然的中文配文短语。
+
+    「逛商场」→「在逛商场」；「准备睡觉」「裹着被子睡觉」本身是动作句，不再加「在」；
+    已经是「在/去…」的原样返回。
+    """
+    body = str(text or "").strip()
+    if not body:
+        return ""
+    if body.startswith(_NO_IN_ACTIVITY):
+        return body
+    return f"在{body}"
+
+
+def scene_name(event, part):
+    """阶段场景在事件素材库里的短名字（如「手机组装车间」）。"""
+    part = part if isinstance(part, dict) else {}
+    ref = part.get("scene_ref")
+    if isinstance(ref, str) and ref.strip():
+        rows = ((event or {}).get("materials") or {}).get("scenes") or []
+        row = next((item for item in rows
+                    if isinstance(item, dict) and str(item.get("id")) == ref.strip()), None)
+        if row:
+            return scene_label(row)
+    return ""
+
+
 def summarize_action(text, limit=15):
     """把一段生图动作提示词压成一句人话（日程/照片文案用）。
 
@@ -165,7 +210,7 @@ _ACTION_NAME_HINTS = ("镜头", "机位", "景别", "拍摄", "画面", "构图"
 
 
 def usable_action_name(name):
-    """判断一个动作 name 是否真的是人话短名字；不是就返回空串。"""
+    """判断一个动作/场景 name 是否真的是人话短名字；不是就返回空串。"""
     body = str(name or "").strip()
     if not body or len(body) > 12:
         return ""
@@ -174,6 +219,32 @@ def usable_action_name(name):
     if any(word in body for word in _ACTION_NAME_HINTS):
         return ""
     return body
+
+
+def _short_from_text(text, limit=12):
+    """从一段环境描述里截出像地名/活动名的前半句（旧数据 name 被截成提示词时兜底）。"""
+    body = str(text or "").strip()
+    if not body:
+        return ""
+    for separator in ("位于", "呈", "坐落", "是", "，", "。", "；", ";", ","):
+        head, found, _rest = body.partition(separator)
+        if found and head.strip():
+            body = head.strip()
+            break
+    body = body.strip("，。；;、 ")
+    for tail in ("的", "里", "中", "前", "上", "下"):
+        if body.endswith(tail) and len(body) > 2:
+            body = body[:-len(tail)]
+    return body.strip()[:limit]
+
+
+def scene_label(entry):
+    """事件场景的短名字：优先用素材 name，name 是提示词片段时从描述前半句截取。"""
+    row = entry if isinstance(entry, dict) else {}
+    name = usable_action_name(row.get("name"))
+    if name:
+        return name
+    return _short_from_text(row.get("text") or row.get("desc"))
 
 
 def usable_action_text(text):
@@ -189,8 +260,11 @@ def usable_action_text(text):
 
 
 def event_label(event):
-    """没有可读动作名时，用事件名当概括（日程/配文只出现这一个短句）。"""
+    """事件短名：去掉「酣畅淋漓的」这类修饰前缀，日程/配文用起来更像人话。"""
     name = str((event or {}).get("name") or "").strip()
+    head, found, rest = name.partition("的")
+    if found and rest.strip() and len(head) <= 6:
+        name = rest.strip()
     return name[:15]
 
 

@@ -8,7 +8,7 @@ import time
 import random
 from datetime import datetime
 from .living import LivingEngine
-from .event_materials import active_event, summarize_action, usable_action_text
+from .event_materials import active_event, activity_phrase, summarize_action, usable_action_text
 from .world_editor import province_travel_hours, resolve_city
 from astrbot.api import logger
 from .geography import WorldProfile, CityCatalog
@@ -302,10 +302,21 @@ class WorldMixin:
         if len(activity.strip()) > 24:
             short = usable_action_text(summarize_action(activity))
             return f"在{short}" if short else "在外面"
+        # 事件阶段名称（用户手写或 AI 总结）优先：比事件标题自然，例如「流水线组装」。
+        phase_name = str(scene.get("phase_name") or "").strip()
+        if phase_name:
+            return activity_phrase(phase_name)
+        # 没有阶段名称时退回阶段场景的短名字（例如「手机组装车间」）。
+        place = str(scene.get("place") or "").strip()
+        if scene.get("event_id") and place:
+            return f"在{place}"
+        if scene.get("event_id"):
+            # 事件标题不是地点，不能再拼「在」；没有阶段名时原样当一句状态说明。
+            return activity or "活动现场"
         # 活动名本身就带「在/去」时别再拼一层，避免「在在某某的酒店住下」
         if activity.startswith(("在", "去", "准备去", "我要去", "我要回")):
             return activity
-        return f"在{activity or '某处'}"
+        return activity_phrase(activity) if activity else "在外面"
 
 
     @staticmethod
