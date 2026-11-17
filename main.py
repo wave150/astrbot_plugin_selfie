@@ -51,8 +51,9 @@ try:  # AstrBot package loader
     from .selfie_core.jobs import TaskSupervisor, PhotoRequest, PhotoUseCase
     from .selfie_core.image_transport import ImageTransportMixin
     from .selfie_core.workspace_host import WorkspaceHostMixin
+    from .selfie_core.workspace import HOME_ROOMS
     from .selfie_core.language import character_text
-    from .selfie_core.scene_context import scene_context_text, local_datetime
+    from .selfie_core.scene_context import scene_context_text, local_datetime, lighting_text
     from .selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from .selfie_core.living import photo_variation
     from .selfie_core.event_materials import action_name, active_event, phase_label, scene_label
@@ -75,8 +76,9 @@ except ImportError:  # direct local test import
     from selfie_core.jobs import TaskSupervisor, PhotoRequest, PhotoUseCase
     from selfie_core.image_transport import ImageTransportMixin
     from selfie_core.workspace_host import WorkspaceHostMixin
+    from selfie_core.workspace import HOME_ROOMS
     from selfie_core.language import character_text
-    from selfie_core.scene_context import scene_context_text, local_datetime
+    from selfie_core.scene_context import scene_context_text, local_datetime, lighting_text
     from selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from selfie_core.living import photo_variation
     from selfie_core.event_materials import action_name, active_event, phase_label, scene_label
@@ -639,6 +641,72 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception:
             return ""
 
+    def _home_lunch_meal(self) -> str:
+        """今天在家做饭/吃午饭的那道菜（生活引擎写进 state['living']['days'][日期]['lunch']）。"""
+        try:
+            living = self.state.get("living") if isinstance(self.state, dict) else None
+            if not isinstance(living, dict):
+                return ""
+            day = self.clock.strftime("%Y-%m-%d", self.clock.localtime())
+            lunch = (living.get("days") or {}).get(day, {}).get("lunch") or {}
+            return str(lunch.get("meal") or "").strip()
+        except Exception:
+            return ""
+
+    def _home_room_pool(self) -> dict:
+        """工作台「世界设置」里的房间（房间名 → 环境描述），拿不到就用内置的六间。"""
+        try:
+            rooms = self._workspace_settings().get("home_rooms")
+        except Exception:
+            rooms = None
+        if isinstance(rooms, dict) and rooms:
+            return rooms
+        return dict(HOME_ROOMS)
+
+    def _roll_home_room(self, scene: dict) -> dict:
+        """在家拍照时每张重新掷一个房间：22:00~07:00 锁卧室，11:00~13:00 在厨房做饭/吃饭。
+
+        场景本身仍由日程决定（在哪座城市、回没回家）；这里只换「这张照片在哪个房间」，
+        所以同一个小时里连拍几张也不会全是客厅。
+        """
+        if not isinstance(scene, dict) or scene.get("event_id"):
+            return scene
+        if not (scene.get("home") or str(scene.get("type") or "") == "home_evening"):
+            return scene
+        rooms = self._home_room_pool()
+        names = [name for name in HOME_ROOM_ORDER if name in rooms]
+        names += [name for name in rooms if name not in HOME_ROOM_ORDER]
+        if not names:
+            return scene
+        hour = int(self.clock.localtime().tm_hour)
+        current = str(scene.get("room") or "")
+        phase = str(scene.get("living_phase") or "")
+        out = dict(scene)
+        if hour >= 22 or hour < 7:
+            room = "卧室" if "卧室" in rooms else names[0]
+        elif 11 <= hour < 13:
+            room = "厨房" if "厨房" in rooms else names[0]
+            if not phase or phase in ("home", "return_home"):
+                out["living_phase"] = "cook" if hour < 12 else "lunch"
+                if not str(out.get("meal") or "").strip():
+                    meal = self._home_lunch_meal()
+                    if meal:
+                        out["meal"] = meal
+                if hour >= 12:
+                    out["meal_table"] = True
+        else:
+            pool = [name for name in names if name != current] or names
+            room = str(self.rng.choice(pool))
+        out["room"] = room
+        desc = rooms.get(room)
+        if isinstance(desc, dict):
+            desc = desc.get("desc")
+        if isinstance(desc, str) and desc.strip():
+            out["desc"] = desc
+        if not str(out.get("activity") or "").strip():
+            out["activity"] = f"在{room}里"
+        return out
+
     # ---------------- 场景数据：外部 scenes.txt（热加载） ----------------
 
 
@@ -734,6 +802,31 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             return library
         except Exception:
             return {}
+
+    def _selfie_actions(self) -> list:
+        """自拍动作素材库：selfie_actions.txt（名字 | 表情 | 手势），按 mtime 热加载。
+
+        文件缺失或解析失败时退回代码里的 SELFIE_ACTIONS，保证日常自拍永远有表情可用。
+        """
+        root = self._material_dir()
+        path = os.path.join(root, FILENAMES["selfie"])
+        if not os.path.exists(path):
+            path = os.path.join(getattr(self, "plugin_dir", ""), FILENAMES["selfie"])
+        try:
+            mtime = os.path.getmtime(path)
+            cache = getattr(self, "_selfie_action_cache", None)
+            if cache and cache[0] == path and cache[1] == mtime:
+                return cache[2]
+            with open(path, encoding="utf-8-sig") as fh:
+                entries = parse_materials("selfie", fh.read())
+            actions = [entry for entry in entries
+                       if str(entry.get("expression") or "").strip()]
+            if not actions:
+                raise RuntimeError("解析结果为空")
+            self._selfie_action_cache = (path, mtime, actions)
+            return actions
+        except Exception:
+            return [dict(item) for item in SELFIE_ACTIONS]
 
     def _costume_tables(self) -> tuple[dict, dict]:
         """读外部衣柜，返回 (名字->描述, 别名->名字)。
@@ -2256,6 +2349,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 return await self._generate(prompt2, model, style, neg)
         return await self._generate(prompt, model, style, neg)
 
+    async def _generate_selfie_shot(self, scene: dict, model: str, style: str,
+                                    look: dict, action: dict) -> bytes:
+        """生图测试「自拍」来源：用选中的表情 / 手势拍一张前置摄像头自拍。"""
+        prompt = self._selfie_prompt(scene, model, style, look, selfie_action=action)
+        return await self._generate(prompt, model, style, look.get("negative_extra"))
+
     async def _do_closeup(self, event: AstrMessageEvent, is_admin: bool,
                           sender: str = "", style_override: str | None = None,
                           removal: dict | None = None,
@@ -2963,9 +3062,21 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             "custom_text": "",
         }
 
+    def _time_light_line(self, scene: dict) -> str:
+        """这一张的时段/光线约束。
+
+        生图模型默认把窗户补成白天，光靠场景描述压不住，所以按场景锁定的
+        钟点单独写一条：夜里必须画夜色、只开暖色灯，窗外不能是白天。
+        """
+        try:
+            return lighting_text(scene if isinstance(scene, dict) else None)
+        except Exception:
+            return ""
+
     def _selfie_prompt(self, scene: dict, model: str | None = None,
                        style: str | None = None,
-                       look: dict | None = None) -> str:
+                       look: dict | None = None,
+                       selfie_action: dict | None = None) -> str:
         """按「模型类型 + 画风 + 这套衣服」生成提示词。
 
         - 带参考图：以参考图中的同一角色为准（脸/发型），衣服按这次解析出来的 look
@@ -2973,6 +3084,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         - 画风只有两种：纯二次元动漫 / 写实真人照片；用户当场点名的画风优先
         - 主人要求摘帽子/脱外套时，用 edit_note 明确让模型把参考图里的物件去掉
         - 动作只由 ``_photo_action`` 决定：睡觉 / 吃饭 / 事件动作都会顶替默认自拍姿势
+        - ``selfie_action`` 由生图测试显式指定（名字/表情/手势），日常自拍传 None 随机抽
         """
         profile = self._profile()
         scene = scene if isinstance(scene, dict) else {}
@@ -2987,14 +3099,21 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             look = self._resolve_look(scene)
         night_kind = self._night_scene_kind(scene)  # "" / "bed" / "bunk" / "cyber"
         sleepy = str(scene.get("type") or "") == "bed_sleepy"
-        expression = self.rng.choice(
-            SLEEPY_EXPRESSIONS if (sleepy or night_kind == "cyber") else EXPRESSIONS)
-        gesture = self.rng.choice(GESTURES)
+        # 日常自拍的表情和手势从自拍动作库随机抽一整条（15 条内置，可在「添加素材」里扩充）
+        picked = (dict(selfie_action) if isinstance(selfie_action, dict) and selfie_action
+                  else dict(self.rng.choice(self._selfie_actions() or SELFIE_ACTIONS)))
+        expression = str(picked.get("expression") or "").strip() or self.rng.choice(EXPRESSIONS)
+        if sleepy or night_kind == "cyber":
+            expression = self.rng.choice(SLEEPY_EXPRESSIONS)
+        gesture = str(picked.get("gesture") or "").strip() or self.rng.choice(GESTURES)
         action = self._photo_action(scene, expression, gesture, night_kind)
         if profile.is_custom:
             prompt = build_custom_prompt(profile, scene, look, style=self._style(style))
             if action["custom_text"]:
                 prompt += "\n" + action["custom_text"]
+            light = self._time_light_line(scene)
+            if light:
+                prompt += "\n" + light
             return prompt
         use_ref = self._use_reference(model, style)
         style = self._style(style)
@@ -3057,6 +3176,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + scene_context_text(scene)
             + f"场景：{scene.get('desc', '')}，背景是真实世界的环境，"
             "有清晰的环境细节、真实材质和自然光影，背景轻微虚化。"
+            # 睡觉/网吧这类动作自己写死了灯光，就不再叠时段光线，免得两句打架
+            + ("" if light_line else self._time_light_line(scene))
             + action["tail"]
             + light_line
             + (self._tongue_line() if TONGUE_PAT.search(head) else "")
@@ -3112,10 +3233,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """
         profile = self._profile()
         if profile.is_custom:
-            return build_custom_prompt(profile, scene, look or self._resolve_look(scene),
-                                       style=self._style(style), kind="closeup",
-                                       cue=self._clean_closeup_cue(str((cue or {}).get("text") or "")),
-                                       interaction=bool(kind), costume_reference=bool(cos_name and with_char_image))
+            prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene),
+                                         style=self._style(style), kind="closeup",
+                                         cue=self._clean_closeup_cue(str((cue or {}).get("text") or "")),
+                                         interaction=bool(kind), costume_reference=bool(cos_name and with_char_image))
+            light = self._time_light_line(scene)
+            if light:
+                prompt += "\n" + light
+            return prompt
         use_ref = self._use_reference(model, style)
         style = self._style(style)
         style_block = STYLE_BLOCK[style]
@@ -3240,6 +3365,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + relax_line
             + CLOSEUP_ANATOMY_LINE
             + f"场景与氛围（以这段为准）：她现在在{scene.get('desc', '')}；{atmosphere}。"
+            + self._time_light_line(scene)
             + "背景就画她此刻所在的这个真实环境，要有清晰的环境细节；"
             + "不要换成其它地方，也不要画成纯色背景、棚拍背景或看不出环境的背景。"
             + STYLE_QUALITY[style]
@@ -4392,24 +4518,40 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return persona[:1200]
 
     async def _llm_text(self, system_prompt: str, prompt: str, *,
-                        timeout: float = 10) -> str:
-        """问一次对话大模型；没配、超时、报错都返回空串，由调用方兜底。"""
+                        timeout: float = 15, retries: int = 1) -> str:
+        """问一次对话大模型；没配、超时、报错都返回空串，由调用方兜底。
+
+        对话模型在高负载时十几秒不回是常事（用户遇到过 TimeoutError 直接掉到
+        兜底文案），所以超时/临时报错后用更长的时限再试一次，两次都失败才兜底。
+        """
         try:
             provider = self.context.get_using_provider()
         except Exception:
             provider = None
         if provider is None:
             return ""
-        try:
-            resp = await asyncio.wait_for(
-                provider.text_chat(system_prompt=system_prompt, prompt=prompt), timeout,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"[selfie] 拟人回复生成失败，用兜底文案: {e!r}")
-            return ""
-        return str(getattr(resp, "completion_text", "") or "")
+        waits = [float(timeout)]
+        for _ in range(max(0, int(retries))):
+            waits.append(max(25.0, min(40.0, waits[-1] * 2)))
+        failure = None
+        for index, wait in enumerate(waits):
+            try:
+                resp = await asyncio.wait_for(
+                    provider.text_chat(system_prompt=system_prompt, prompt=prompt), wait,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failure = e
+                if index + 1 < len(waits):
+                    logger.info(
+                        f"[selfie] 拟人回复 {wait:g}s 内没拿到结果（{e!r}），加时重试"
+                    )
+                    continue
+                break
+            return str(getattr(resp, "completion_text", "") or "")
+        logger.warning(f"[selfie] 拟人回复生成失败，用兜底文案: {failure!r}")
+        return ""
 
     async def _natural_ack(self, event, *, action_line: str, detail: str = "",
                            fallback_pool=None, style_override: str | None = None,
@@ -4455,14 +4597,33 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             detail="".join([detail] + hints),
             history=history,
             mark=self._shutter_mark_enabled(),
+            recent=self._recent_ack_lines(),
         )
-        text = dialogue.usable_reply(await self._llm_text(system, prompt),
-                                     keep_lines=True)
+        text = dialogue.usable_ack(await self._llm_text(system, prompt),
+                                   recent=self._recent_ack_lines())
         if text:
-            return dialogue.finalize_reply(text, kacha=self._shutter_mark_enabled())
+            reply = dialogue.finalize_reply(text, kacha=self._shutter_mark_enabled())
+            self._remember_ack(reply)
+            return reply
         return dialogue.finalize_reply(
             self.rng.choice(pool), kacha=self._shutter_mark_enabled()
         )
+
+    def _recent_ack_lines(self) -> list:
+        """最近几次接单话（只留第一行），用来避免每次都说同一句。"""
+        rows = getattr(self, "_ack_history", None)
+        return list(rows) if isinstance(rows, list) else []
+
+    def _remember_ack(self, text: str) -> None:
+        first = str(text or "").split("\n")[0].strip()
+        if not first:
+            return
+        rows = getattr(self, "_ack_history", None)
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(first[:40])
+        self._ack_history = rows[-8:]
+
 
     async def _ack_text(self, event: AstrMessageEvent, style_override: str | None,
                         removal: dict | None = None,
@@ -4598,7 +4759,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             user_text=self._clean_text(event) if event is not None else "",
             history=history,
         )
-        return dialogue.usable_caption(await self._llm_text(system, prompt, timeout=9))
+        return dialogue.usable_caption(await self._llm_text(system, prompt, timeout=15))
 
     async def _deliver_photo(self, event, img: bytes, *, scene: dict, look: dict,
                              kind: str, fallback_caption: str,
@@ -4645,6 +4806,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                          force_costume: bool = False) -> None:
         try:
             scene, _event_action = self._event_photo_scene(await self._get_scene())
+            scene = self._roll_home_room(scene)
             look = self._resolve_look(scene, removal, None, costume, force_costume)
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
             style = self._style(style_override)

@@ -141,7 +141,8 @@ class WorkspaceHostMixin:
         return {'image': 'data:' + mime + ';base64,' + base64.b64encode(data).decode('ascii')}
 
     async def _workspace_test(self, payload, *, costume_override=None, cue_override=None,
-                              scene=None, album_source='test', album_meta=None):
+                              scene=None, album_source='test', album_meta=None,
+                              classic=None):
         """Explicit paid preview. Do not mutate world, photo memory, or user quotas."""
         if payload.get('confirm_paid') is not True:
             raise ValueError('请确认本次测试会调用生图服务')
@@ -154,7 +155,14 @@ class WorkspaceHostMixin:
         store = MaterialStore(root, paths=paths,
                               backup_dir=os.path.join(root, 'material_backups') if root else None,
                               fallback_root=self.plugin_dir)
-        if costume_override is None:
+        # 经典四档：不换装，直接穿参考图里那套；hat_off / coat_off 由服务端从固定表里取。
+        classic = classic if isinstance(classic, dict) else None
+        if classic is not None:
+            if classic.get('id') not in {-1, -2, -3, -4}:
+                raise ValueError('经典服装编号无效')
+            costume = {'name': str(classic.get('name') or '经典'),
+                       'description': '参考图里的默认服装（不换装）'}
+        elif costume_override is None:
             costume = next((x for x in store.list('costume') if x['id'] == int(payload['costume_id'])), None)
         else:
             # Only the owner-validated service passes this keyword; never read it from payload.
@@ -163,8 +171,22 @@ class WorkspaceHostMixin:
                                for k in ('name', 'desc'))):
                 raise ValueError('衣服草稿格式无效')
             costume = {'name': costume_override['name'], 'description': costume_override['desc']}
+        selfie_action = None
+        if cue_override is not None and isinstance(cue_override, dict):
+            raw_action = cue_override.get('selfie')
+            if isinstance(raw_action, dict):
+                selfie_action = {
+                    'name': str(raw_action.get('name') or '自拍动作')[:40],
+                    'expression': str(raw_action.get('expression') or '').strip()[:200],
+                    'gesture': str(raw_action.get('gesture') or '').strip()[:200],
+                }
+                if not selfie_action['expression']:
+                    raise ValueError('自拍动作格式无效')
         if cue_override is None:
             cue = next((x for x in store.list('closeup') if x['id'] == int(payload['closeup_id'])), None)
+        elif selfie_action is not None:
+            cue = {'text': f"{selfie_action['name']}：{selfie_action['expression']}"
+                           f"，{selfie_action['gesture']}"[:4000]}
         else:
             # Event/testing action text replaces the closeup cue; still validated here.
             text = cue_override.get('text') if isinstance(cue_override, dict) else None
@@ -225,10 +247,21 @@ class WorkspaceHostMixin:
             self._generating = True
             try:
                 await self._workspace_scene_context(scene, now)
-                look = self._resolve_look(scene, costume={'name': costume['name'],
-                                          'desc': costume['description']}, force_costume=True)
-                data = await self._generate_closeup(scene, str(self._cfg('model', 'gpt-image-2.5-flare')),
-                                                   self._style(), look, cue)
+                if classic is not None:
+                    look = self._resolve_look(scene, removal={
+                        'hat_off': bool(classic.get('hat_off')),
+                        'coat_off': bool(classic.get('coat_off')),
+                    })
+                else:
+                    look = self._resolve_look(scene, costume={'name': costume['name'],
+                                              'desc': costume['description']}, force_costume=True)
+                model = str(self._cfg('model', 'gpt-image-2.5-flare'))
+                if selfie_action is not None:
+                    # 「自拍」来源：用选中的表情/手势拍一张前置摄像头自拍，构图按自拍提示词走。
+                    data = await self._generate_selfie_shot(scene, model, self._style(), look,
+                                                            selfie_action)
+                else:
+                    data = await self._generate_closeup(scene, model, self._style(), look, cue)
                 try:
                     self._album().save(data, source=album_source, meta=meta)
                 except Exception as album_err:

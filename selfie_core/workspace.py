@@ -16,6 +16,7 @@ import uuid
 
 from .storage import JsonStateStore
 from .materials import MaterialStore, KINDS
+from .defaults import CLASSIC_COSTUMES
 from . import world_editor
 from . import legacy_world
 from .living import validate_event, LivingEngine
@@ -224,6 +225,17 @@ _INTERACTION_INSTRUCTION = (
     "明确画外互动手的触点、触碰方向与力度、手指和关节动作、人物反应、身体支撑关系、"
     "镜头机位、景别及自然松弛感。不要固定人物身份、发色、服装、地点或场景，"
     "让互动适配当前角色与实际环境。不要编号、标题、解释、代码围栏或其他行。"
+)
+# 「自拍动作」额外一层自拍要求：这些是前置摄像头自拍的硬约束，润色时不许被改写掉。
+_SELFIE_INSTRUCTION = (
+    "你只生成一条前置摄像头自拍动作素材。输出唯一一行：名字 | 表情 | 手势。"
+    "名字 2-6 字（例如：歪头比耶）；表情写眉眼、嘴角和头部朝向；"
+    "手势写「没拿手机的那只手」在做什么（比耶、托腮、比心、撩头发、挥手等）。"
+    "必须满足：这是手机前置摄像头第一人称自拍，竖屏近景、只拍上半身和脸，"
+    "镜头就在画面前方；另一只手（拿手机的那只）在画面外，画面里不能出现手机、相机、"
+    "自拍杆，也不要写「一只手拿着手机拍摄」「举着手机对镜自拍」这类描述；"
+    "表情和手势要能同时入画，不要写另一个人的手或路人视角。"
+    "不要人物身份、发色、服装、地点、背景、画风，不要编号、标题、解释、代码围栏或其他行。"
 )
 _SCENE_INSTRUCTION = (
     "你只生成一条事件场景/地点环境描述。输出唯一一行中文正文，至少200字（200-400字）。"
@@ -765,7 +777,8 @@ class WorkspaceService:
         default_source = "event" if mode == "event" else "daily"
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
-        if costume_source not in ("daily", "event") or action_source not in ("daily", "event", "meal", "sleep"):
+        if costume_source not in ("daily", "event") or action_source not in (
+                "daily", "event", "meal", "sleep", "selfie"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
         event = None
@@ -788,6 +801,7 @@ class WorkspaceService:
             scene, meta = request["scene"], dict(request["meta"])
 
         costume_override = None
+        classic = None
         if costume_source == "event":
             submitted = payload.get("event_costume")
             if submitted is not None:
@@ -796,8 +810,16 @@ class WorkspaceService:
                 costume_override = request["costume"]
             if costume_override is None:
                 raise WorkspaceError("请选择事件服装")
-        elif type(payload.get("costume_id")) is not int or payload["costume_id"] <= 0:
-            raise WorkspaceError("请选择日常服装")
+        else:
+            costume_id = payload.get("costume_id")
+            if type(costume_id) is not int or costume_id == 0:
+                raise WorkspaceError("请选择日常服装")
+            if costume_id < 0:
+                # 经典四档：不换装，直接穿参考图里的那套；帽/外套按档位去掉。
+                classic = next((dict(item) for item in CLASSIC_COSTUMES
+                                if item["id"] == costume_id), None)
+                if classic is None:
+                    raise WorkspaceError("请选择日常服装")
 
         cue_override = None
         if action_source == "event":
@@ -836,6 +858,22 @@ class WorkspaceService:
             cue_override = {"text": sleep_cue(kind)}
             if meta is not None:
                 meta["sleep_kind"] = kind
+        elif action_source == "selfie":
+            # 「自拍」来源：动作 / 特写下拉里列的是自拍动作（表情 + 手势），生成时用自拍提示词。
+            selfie_id = payload.get("selfie_id")
+            entry = None
+            if type(selfie_id) is int:
+                entry = next((x for x in self.materials.list("selfie")
+                              if x["id"] == selfie_id), None)
+            if entry is None:
+                raise WorkspaceError("请选择自拍动作（先在「添加素材」里添加自拍动作）")
+            cue_override = {"selfie": {
+                "name": str(entry.get("name") or "自拍动作"),
+                "expression": str(entry.get("expression") or ""),
+                "gesture": str(entry.get("gesture") or ""),
+            }}
+            if meta is not None:
+                meta["selfie_action"] = str(entry.get("name") or "")
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 
@@ -846,7 +884,7 @@ class WorkspaceService:
         try:
             image = await self.host._workspace_test(
                 deepcopy(payload), costume_override=costume_override, cue_override=cue_override,
-                scene=scene, album_meta=meta)
+                scene=scene, album_meta=meta, classic=classic)
         except ValueError as exc:
             raise WorkspaceError(str(exc) or "测试参数无效，请刷新页面后重试") from exc
         return {"image": image}
@@ -968,6 +1006,29 @@ class WorkspaceService:
                 raise WorkspaceConflict("素材已更新，请刷新后重新生成草稿") from exc
             raise WorkspaceError("工作台输入无效，请检查必填项、城市区划或草稿格式") from exc
 
+    @staticmethod
+    def _config_flag(host, key, default=False):
+        getter = getattr(host, "_cfg", None)
+        if not callable(getter):
+            return bool(default)
+        try:
+            return bool(getter(key, default))
+        except Exception:
+            return bool(default)
+
+    def classic_costumes(self):
+        """生图测试「日常服装」最前面的经典档位，按「角色有帽子 / 有外套」两个开关过滤。"""
+        has_hat = self._config_flag(self.host, "role_has_hat", False)
+        has_outer = self._config_flag(self.host, "role_has_outer", False)
+        rows = []
+        for item in CLASSIC_COSTUMES:
+            if item["hat_off"] and not has_hat:
+                continue
+            if item["coat_off"] and not has_outer:
+                continue
+            rows.append(dict(item))
+        return rows
+
     async def _dispatch(self, action, payload, owner):
         owner = _text(owner, "owner")
         if not isinstance(payload, dict):
@@ -981,6 +1042,7 @@ class WorkspaceService:
                         "event_history": self.event_history(),
                         "home_room_defaults": deepcopy(HOME_ROOMS),
                         "overnight_scenes": overnight_list(),
+                        "classic_costumes": self.classic_costumes(),
                         "revision": self._document["revision"]}
         if action == "initialize_world":
             return await self._initialize_world(payload)
@@ -1123,6 +1185,7 @@ class WorkspaceService:
                 "closeup": _CLOSEUP_INSTRUCTION,
                 "interaction": _INTERACTION_INSTRUCTION,
                 "meal": _MEAL_INSTRUCTION,
+                "selfie": _SELFIE_INSTRUCTION,
             }
             task_text = payload.get("text") or ""
             if not isinstance(task_text, str):

@@ -373,6 +373,7 @@
                 <option value="event">事件动作（事件素材）</option>
                 <option value="meal">吃饭（菜品库）</option>
                 <option value="sleep">睡觉（夜间动作）</option>
+                <option value="selfie">自拍（自拍动作库）</option>
               </select>
             </div>
             <div class="field">
@@ -447,6 +448,7 @@
               <option value="closeup">特写（closeup）</option>
               <option value="interaction">互动（interaction）</option>
               <option value="meal">菜品（meal）</option>
+              <option value="selfie">自拍动作（selfie）</option>
             </select>
           </div>
           <div class="field">
@@ -739,7 +741,8 @@
     costume: "服装草稿必须是单行：名称 | 别名（逗号分隔，可空） | 服装描述 —— 用 | 分成三段。",
     closeup: "特写草稿必须是单行构图描述（机位、动作、光线都可以写进去）。",
     interaction: "互动草稿必须是单行，并以「摸摸：」或「捏捏：」开头。",
-    meal: "菜品草稿必须是单行：「菜名 | 约100字描述」，只写菜、主食、餐具和桌面，不写人物。"
+    meal: "菜品草稿必须是单行：「菜名 | 约100字描述」，只写菜、主食、餐具和桌面，不写人物。",
+    selfie: "自拍动作草稿必须是单行：「名字 | 表情 | 手势」，前置摄像头自拍、近景只拍上半身；画面里不出现手机/相机/自拍杆，手势只用没拿手机的那只手。"
   };
   /* 生图测试：动作来源选「吃饭」时，「动作 / 特写」只列这 5 套吃饭机位（顺序同后端 meal.MEAL_SETUPS）。 */
   var MEAL_SETUP_OPTIONS = [
@@ -773,8 +776,9 @@
   var state = {
     loaded: false,
     revision: 0,
-    materials: { costume: [], closeup: [], interaction: [], meal: [] },
-    materialRevisions: { costume: "", closeup: "", interaction: "", meal: "" },
+    materials: { costume: [], closeup: [], interaction: [], meal: [], selfie: [] },
+    materialRevisions: { costume: "", closeup: "", interaction: "", meal: "", selfie: "" },
+    classicCostumes: [],
     materialQuery: "",
     worldSetup: null,
     cities: [],
@@ -1613,13 +1617,14 @@
       costume: materialEntries(raw.costume),
       closeup: materialEntries(raw.closeup),
       interaction: materialEntries(raw.interaction),
-      meal: materialEntries(raw.meal)
+      meal: materialEntries(raw.meal),
+      selfie: materialEntries(raw.selfie)
     };
   }
 
   function normalizeMaterialRevisions(raw) {
     raw = raw && typeof raw === "object" ? raw : {};
-    var out = { costume: "", closeup: "", interaction: "", meal: "" };
+    var out = { costume: "", closeup: "", interaction: "", meal: "", selfie: "" };
     Object.keys(out).forEach(function (kind) {
       var snapshot = raw[kind];
       out[kind] = snapshot && typeof snapshot === "object" && snapshot.revision
@@ -1632,6 +1637,11 @@
     var text = str(entry && entry.text);
     if (kind === "costume") return str(entry && entry.name) || truncate(text, 40);
     if (kind === "meal") return str(entry && entry.name) || truncate(text, 40);
+    if (kind === "selfie") {
+      var name = str(entry && entry.name);
+      var expression = str(entry && entry.expression);
+      return name ? name + (expression ? "（" + truncate(expression, 22) + "）" : "") : truncate(text, 44);
+    }
     if (kind === "interaction") {
       var action = str(entry && entry.action);
       if (action && text.indexOf(action) === 0) return truncate(text, 40);
@@ -2628,6 +2638,13 @@
     state.revision = isFinite(revision) ? revision : 0;
     state.materials = normalizeMaterials(data.materials);
     state.materialRevisions = normalizeMaterialRevisions(data.materials);
+    state.classicCostumes = (Array.isArray(data.classic_costumes) ? data.classic_costumes : [])
+      .filter(function (item) { return item && typeof item === "object"; })
+      .map(function (item) {
+        return { id: Number(item.id), name: str(item.name),
+          hat_off: !!item.hat_off, coat_off: !!item.coat_off };
+      })
+      .filter(function (item) { return isFinite(item.id) && item.id < 0; });
     state.cities = normalizeCities(data.cities);
     if (!state.settingsDirty || options.forceSettings) {
       state.settings = (data.settings && typeof data.settings === "object") ? clone(data.settings) : {};
@@ -2698,13 +2715,23 @@
   function fillMaterialSelect(select, items, kind, preserve) {
     var previous = preserve ? select.value : "";
     clear(select);
+    /* 日常服装最前面是经典四档（经典 / 脱帽经典 / 脱外套经典 / 无帽无外套经典）：
+       值为负数，后端按固定表解析成「不换装、按档位去掉帽子或外套」。 */
+    if (kind === "costume") {
+      (state.classicCostumes || []).forEach(function (item) {
+        var option = document.createElement("option");
+        option.value = str(item.id);
+        option.textContent = "经典：" + str(item.name) + "（不换装）";
+        select.appendChild(option);
+      });
+    }
     (items || []).forEach(function (entry) {
       var option = document.createElement("option");
       option.value = str(entry.id);
       option.textContent = "#" + str(entry.id) + " " + truncate(materialLabel(kind, entry), 44);
       select.appendChild(option);
     });
-    if (!items || !items.length) {
+    if (!select.options.length) {
       var emptyOption = document.createElement("option");
       emptyOption.value = "";
       emptyOption.textContent = "（素材库为空）";
@@ -2714,8 +2741,8 @@
       return;
     }
     select.disabled = false;
-    var keep = previous && items.some(function (entry) { return str(entry.id) === previous; });
-    select.value = keep ? previous : str(items[0].id);
+    var values = Array.prototype.map.call(select.options, function (option) { return option.value; });
+    select.value = previous && values.indexOf(previous) !== -1 ? previous : values[0];
   }
 
   function selectedMaterialId(select) {
@@ -3524,7 +3551,9 @@
         ? "吃饭来源下这里只列 5 套吃饭机位，生成时按选中的那套拍。"
         : state.testActionSource === "sleep"
           ? "睡觉来源下这里列 00:30 之后的三种过夜拍法，生成时会带「关灯、只有屏幕冷光」的要求。"
-          : "";
+          : state.testActionSource === "selfie"
+            ? "自拍来源下这里列的是自拍动作（表情 + 手势），生成时会用前置摄像头自拍的构图，画面里不会出现手机。"
+            : "";
     }
     if (state.testActionSource === "meal") {
       fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
@@ -3533,6 +3562,9 @@
       state.testEventActions = [];
     } else if (state.testActionSource === "sleep") {
       fillSleepSelect(closeupSelect, preserve);
+      state.testEventActions = [];
+    } else if (state.testActionSource === "selfie") {
+      fillMaterialSelect(closeupSelect, state.materials.selfie || [], "selfie", preserve);
       state.testEventActions = [];
     } else if (state.testActionSource === "daily") {
       fillMaterialSelect(closeupSelect, state.materials.closeup, "closeup", preserve);
@@ -3575,7 +3607,7 @@
       reasons.push("来源选了事件素材：需要先选一个事件");
     }
     if (state.testCostumeSource === "daily") {
-      if (!state.materials.costume.length) reasons.push("素材库没有服装（costume）");
+      if (!state.materials.costume.length && !(state.classicCostumes || []).length) reasons.push("素材库没有服装（costume）");
       else if (!$("#t-costume") || $("#t-costume").value === "") reasons.push("还没有选择日常服装");
     } else if (!state.testEventCostume) {
       reasons.push("该事件没有可用的事件服装（先在事件里写服装或设置事件服装随机池）");
@@ -3588,6 +3620,9 @@
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择吃饭动作");
     } else if (state.testActionSource === "sleep") {
       if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择睡觉动作");
+    } else if (state.testActionSource === "selfie") {
+      if (!(state.materials.selfie || []).length) reasons.push("素材库没有自拍动作（selfie）");
+      else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择自拍动作");
     } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
@@ -3982,7 +4017,12 @@
       var costumeId = selectedMaterialId($("#t-costume"));
       if (costumeId === null) { toast("请选择日常服装", "err"); return; }
       payload.costume_id = costumeId;
-      costumeLine = "服装：日常 #" + costumeId;
+      var classicPick = (state.classicCostumes || []).filter(function (item) {
+        return Number(item.id) === costumeId;
+      })[0];
+      costumeLine = classicPick
+        ? "服装：经典档位「" + str(classicPick.name) + "」（不换装，穿参考图那套）"
+        : "服装：日常 #" + costumeId;
     } else {
       var costume = state.testEventCostume;
       if (!costume) { toast("该事件没有可用的事件服装", "err"); return; }
@@ -4019,6 +4059,14 @@
       if (closeupId === null) { toast("请选择日常特写", "err"); return; }
       payload.closeup_id = closeupId;
       actionLine = "动作：日常特写 #" + closeupId;
+    } else if (state.testActionSource === "selfie") {
+      var selfieId = selectedMaterialId($("#t-closeup"));
+      if (selfieId === null) { toast("请选择自拍动作", "err"); return; }
+      payload.selfie_id = selfieId;
+      var selfieEntry = (state.materials.selfie || []).filter(function (row) {
+        return Number(row.id) === selfieId;
+      })[0];
+      actionLine = "动作：自拍「" + (selfieEntry ? materialLabel("selfie", selfieEntry) : ("#" + selfieId)) + "」";
     } else {
       var actionText = testActionValue();
       if (!actionText) { toast("事件动作不能为空", "err"); return; }
@@ -4155,7 +4203,8 @@
     costume: "格式：名称 | 别名1,别名2 | 服装描述（别名可为空，但竖线要保留两处）",
     closeup: "一行一条特写提示词；编号保持不变，其它条目编号也不受影响。",
     interaction: "一行一条互动提示词；一般以「摸摸」「捏捏」开头。",
-    meal: "一行一条菜品：「菜名 | 描述」，描述约100字，写清菜、主食和餐具。"
+    meal: "一行一条菜品：「菜名 | 描述」，描述约100字，写清菜、主食和餐具。",
+    selfie: "一行一条自拍动作：「名字 | 表情 | 手势」；前置摄像头自拍，画面里不出现手机，手势只用没拿手机的那只手。"
   };
 
   function applyMaterialWriteResult(kind, result) {
@@ -4166,9 +4215,7 @@
     }
     if (result && result.revision) state.materialRevisions[kind] = str(result.revision);
     renderMaterialPanel();
-    fillMaterialSelect($("#t-costume"), state.materials.costume, "costume");
-    fillMaterialSelect($("#t-closeup"), state.materials.closeup, "closeup");
-    fillMaterialSelect($("#t-meal"), state.materials.meal, "meal");
+    renderTestMaterialSources(true);
     fillMaterialSelect($("#try-closeup"), state.materials.closeup, "closeup", true);
     renderEvents();
   }
@@ -4188,6 +4235,10 @@
     if (text.indexOf("\n") !== -1) { toast("只能写一行；多条请分别编辑", "warn"); return; }
     if (kind === "costume" && text.split("|").length !== 3) {
       toast("服装格式要是「名称 | 别名 | 描述」三段", "warn");
+      return;
+    }
+    if (kind === "selfie" && text.split("|").length !== 3) {
+      toast("自拍动作格式要是「名字 | 表情 | 手势」三段", "warn");
       return;
     }
     if (btn) btn.disabled = true;
@@ -6574,8 +6625,9 @@
     if (actionSource) actionSource.addEventListener("change", function () {
       state.testActionSource = actionSource.value === "event" ? "event"
         : actionSource.value === "meal" ? "meal"
-        : actionSource.value === "sleep" ? "sleep" : "daily";
-      if (state.testActionSource === "daily") {
+        : actionSource.value === "sleep" ? "sleep"
+        : actionSource.value === "selfie" ? "selfie" : "daily";
+      if (state.testActionSource === "daily" || state.testActionSource === "selfie") {
         state.testAction = "";
         var actionBox = $("#t-action");
         if (actionBox) actionBox.value = "";

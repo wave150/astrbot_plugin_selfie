@@ -256,6 +256,32 @@ def usable_reply(text, *, min_len=4, max_len=90, keep_lines=False):
     return value
 
 
+_ACK_CLICHES = ("行行行", "行吧行吧", "好好好", "来了来了", "马上马上", "这就这就")
+
+# 「刚从外面回来」「刚下班」「刚到家」这类交代来路的句子：用户明确不要。
+# 处境里没给过的行踪不能编，出现了就退回兜底文案。
+_FRESH_CLAIM_PAT = re.compile(
+    r"刚(?:才)?(?:从[^，。；！？,.;!?\s]{0,10}?)?"
+    r"(?:回来|到家|回家|下班|放学|起床|睡醒|洗完|吃完|忙完|出门)"
+)
+
+
+def usable_ack(text, *, recent=(), max_len=90):
+    """接单话的额外校验：敷衍口头禅和跟最近重复的说法一律退回兜底。"""
+    value = usable_reply(text, keep_lines=True, max_len=max_len)
+    if not value:
+        return ""
+    first = value.split("\n")[0].replace(KACHA, "").strip(" ，,、")
+    if any(first.startswith(word) for word in _ACK_CLICHES):
+        return ""
+    if _FRESH_CLAIM_PAT.search(value):
+        return ""
+    tips = [str(item).replace(KACHA, "").strip(" ，,、") for item in recent if str(item).strip()]
+    if first and any(first == tip for tip in tips[-6:]):
+        return ""
+    return value
+
+
 def usable_caption(text, *, max_len=90):
     """Validate the post-photo sentence; '' means caller falls back."""
     value = usable_reply(text, min_len=4, max_len=max_len, keep_lines=True)
@@ -264,6 +290,14 @@ def usable_caption(text, *, max_len=90):
     # 模板腔：「给你～」「这是照片」这类还是机械味，直接退回兜底配文。
     if value.startswith(("给你", "这是照片", "照片里")):
         return ""
+    if _FRESH_CLAIM_PAT.search(value):
+        # 用户明确不要「刚从外面回来」这种交代：把带这句的句子整句删掉，
+        # 剩下的照片描述照常发；删空了才退回兜底配文。
+        pieces = re.split(r"(?<=[。！？!?；;\n])", value)
+        value = "".join(part for part in pieces
+                        if part.strip() and not _FRESH_CLAIM_PAT.search(part)).strip()
+        if not value or _FRESH_CLAIM_PAT.search(value):
+            return ""
     if value.count("（") >= 2 and "咔嚓" not in value:
         # 一串括号补充说明就是旧配文格式，不要。
         return ""
@@ -336,7 +370,7 @@ def history_lines(history, *, limit=8, width=80):
 
 
 def ack_prompts(*, persona, user_text, scene_line="", action_line="",
-                detail="", history=(), mark=True):
+                detail="", history=(), mark=True, recent=()):
     """Prompts for the pre-photo reply (order accepted, first sentence 咔嚓)."""
     system = (
         f"{persona}\n"
@@ -347,31 +381,44 @@ def ack_prompts(*, persona, user_text, scene_line="", action_line="",
     )
     blocks = [f"对方刚说：{user_text or '（他没说话，只是想要一张照片）'}"]
     if scene_line:
-        blocks.append(f"你现在的处境：{scene_line}")
+        blocks.append(f"你现在的处境：{scene_line}（这是你此刻真实的位置和状态，只能按这个说，"
+                      "不要另外编行程）")
     if action_line:
         blocks.append(f"接下来你要做的是：{action_line}")
     if detail:
         blocks.append(f"补充情况：{detail}")
+    if recent:
+        blocks.append(
+            "你最近几次接单是这么说的：" + " / ".join(str(line) for line in recent[:6])
+            + "\n这次别再用一样的开头和句式，换个说法。"
+        )
     if history:
         blocks.append("刚才的聊天（从早到晚）：\n" + "\n".join(history))
+    blocks.append(
+        "不要用「行行行」「行吧行吧」「好好好」「来了来了」这类敷衍口头禅开头；"
+        "不要编造上面处境里没有的行程（比如「刚从外面回来」「刚下班」「刚吃完饭」），"
+        "整段都不要用「刚」交代行踪或刚做完的事，"
+        "你此刻在哪儿、在做什么以上面的处境为准。"
+    )
     if mark:
         blocks.append(
             "要求：写成两行。第一行先接住对方这句话——答应下来，顺便带点你此刻的情绪"
             "（吐槽、撒娇、反问都行，别端着）；"
             f"这一行的结尾就是{KACHA}两个字，不要把它放在开头，行末也别再加别的标点。"
-            "第二行再顺口说一句你手上正在忙什么、或者为什么现在才拍。"
+            "第二行再顺口说一句你手上正在忙什么（别交代刚去过哪、刚做完什么）。"
             "两行都是第一人称口语，各 8~25 字，不要引号、不要 emoji、不要解释；"
             "上面没给过的具体菜名、人名、物品不要凭空编。"
         )
     else:
         blocks.append(
             "要求：写成两行。第一行先接住对方这句话——答应下来，顺便带点你此刻的情绪"
-            "（吐槽、撒娇、反问都行，别端着）；第二行再顺口说一句你手上正在忙什么、"
-            "或者为什么现在才拍。两行都是第一人称口语，各 8~25 字，"
+            "（吐槽、撒娇、反问都行，别端着）；第二行再顺口说一句你手上正在忙什么"
+            "（别交代刚去过哪、刚做完什么）。两行都是第一人称口语，各 8~25 字，"
             "不要拟声词、不要（咔嚓）或🤳之类的符号、不要引号、不要 emoji、不要解释；"
             "上面没给过的具体菜名、人名、物品不要凭空编。"
         )
     return system, "\n".join(blocks)
+
 
 
 def caption_prompts(*, persona, kind, scene_line="", doing_line="", look_line="",
@@ -380,8 +427,9 @@ def caption_prompts(*, persona, kind, scene_line="", doing_line="", look_line=""
     system = (
         f"{persona}\n"
         "你刚把一张真实的照片发给对方，照片已经发出去了。"
-        "现在用你自己的语气跟他说一句你在照片里正在干什么，"
-        "就像随手发完图顺口补一句那样，不要主持、不要介绍、不要念稿。"
+        "现在用你自己的语气，先用第一人称说说这张照片里的你"
+        "（在做什么、在哪儿、什么样子），再顺口回应他刚才说的话，"
+        "就像随手发完图补一句那样，不要主持、不要介绍、不要念稿。"
         "只输出你要发出去的文字，不要引号、不要 emoji。"
     )
     blocks = [f"这张照片是：{kind or '自拍'}"]
@@ -400,8 +448,11 @@ def caption_prompts(*, persona, kind, scene_line="", doing_line="", look_line=""
     if history:
         blocks.append("刚才的聊天：\n" + "\n".join(history))
     blocks.append(
-        "要求：1~2 句、15~50 个字、第一人称口语，挑一两个最有画面的具体细节说"
-        "（在哪儿、手上在忙什么、身上这身衣服、当下的心情都可以），别和上一句答应他的话重复；"
+        "要求：先说这张照片本身——第一人称讲照片里的你（在哪个房间或地方、穿什么、"
+        "在做什么、什么表情，挑一两个最有画面的细节），最后用一句回应对方刚说的话；"
+        "顺序不能反，不要先交代「刚从外面回来」「刚下班」「刚到家」这种来路再讲照片，"
+        "整段都不要出现用「刚」交代行踪或刚做完的事的句子；"
+        "1~2 句、15~50 个字、第一人称口语，别和上一句答应他的话重复；"
         "不要编造上面没给过的具体菜名、人名或物品，不确定的细节就跳过；"
         "不要用括号解释，不要罗列清单，不要出现照片、图片、构图、比例、镜头语言这类词。"
     )

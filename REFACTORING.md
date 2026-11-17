@@ -165,6 +165,17 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 - `main._photo_action()` 判断顺序改为：**事件当前动作 > 睡觉 / 吃饭（平级）> 默认自拍**。事件进行中不再被睡觉/吃饭盖掉；睡觉与吃饭场景互斥，保持平级即可。
 - `test_main_boundaries.test_photo_action_priority_event_over_sleep_meal_then_default` 同步覆盖四种来源与顺序；总计 419 项通过。
 
+## v1.6.2 自拍动作库、测试「自拍」来源、经典服装与家庭房间
+
+- 自拍动作库：`selfie_core/defaults.SELFIE_ACTIONS`（15 条内置）与数据目录 `selfie_actions.txt`（`名字 | 表情 | 手势`）；`materials.KINDS` 新增 `selfie`、`FILENAMES["selfie"]`、`SEED_VERSIONS["selfie"] = 1`，`_entry` 解析两 / 三段、草稿必须是三段。`main._selfie_actions()` 按 mtime 热加载，文件缺失时退回内置库；`_selfie_prompt(..., selfie_action=...)` 用抽到的那条动作替换「EXPRESSIONS × GESTURES」的独立随机。
+- 生图测试「自拍」来源：`workspace._test()` 接受 `action_source="selfie"` + `selfie_id`，从素材库取表情 / 手势传给 host；`workspace_host._workspace_test()` 用 `_generate_selfie_shot()` 走自拍提示词（前置摄像头构图），与「特写」路径分开。`workspace._SELFIE_INSTRUCTION` 是自拍动作草稿的额外自拍约束（不出手机、一只手在画外拿着拍、竖屏近景）。
+- 经典服装档位：`defaults.CLASSIC_COSTUMES` 固定四档（id -1…-4），`workspace._test()` 允许负数 `costume_id` 并解析成 `classic`，`_workspace_test(..., classic=...)` 不强制换装、只按档位去掉帽子 / 外套；`WorkspaceService.classic_costumes()` 按 `role_has_hat` / `role_has_outer` 两个配置项过滤，bootstrap 返回给前端渲染下拉。
+- 在家房间随机：`main._roll_home_room(scene)` 只在 `scene.home` 时生效，房间取工作台 `home_rooms`（回退内置六间）；22:00–07:00 锁卧室、11:00–13:00 锁厨房（11 点补 `living_phase="cook"`，12 点补 `lunch` + `meal_table`，缺菜名时从 `state["living"]["days"][日期]["lunch"]` 取），其它时间避开当前房间随机。`_do_selfie()` 在 `_event_photo_scene()` 之后调用它。
+- 接单话去重：`dialogue.ack_prompts(..., recent=())` 增加「不要行行行 / 不要编行程 / 最近说过的话换说法」约束；`dialogue.usable_ack(text, recent=...)` 过滤敷衍口头禅与重复句；`main._natural_ack()` 维护 `_ack_history`（最近 8 句第一行）并在生成后记录。
+- 配文与光线的两处修正：`dialogue.caption_prompts()` 改成「先第一人称讲照片里的自己、再回应上下文」，并禁止「刚…」交代行踪；`dialogue._FRESH_CLAIM_PAT` 命中时 `usable_caption()` / `usable_ack()` 把带该句的整句删掉（删空才兜底）。`selfie_core.scene_context.lighting_text(scene)` 按场景钟点输出时段光线约束（`scene_hour()` 依次读 `local_time` / `hour_key` / `created_at`），22:00–05:00 写死「窗外是夜色、不能出现白天日光」；`main._time_light_line()` 把它接进 `_selfie_prompt()` 与 `_closeup_prompt()`，动作自带 `light_line`（睡觉 / 网吧）时不叠加。
+- 超时重试：`main._llm_text(..., timeout=15, retries=1)` 在超时或临时报错后按 15s → 30s 再试一次，两次都失败才返回空串走兜底；配文调用超时同步从 9s 提到 15s。
+- 测试：新增 `tests/test_selfie_actions.py`（15 条内置、文件解析、经典档位过滤）、`test_workspace`（经典档位传参、自拍动作来源、非法编号）、`test_main_boundaries`（在家房间随机 / 22 点卧室 / 11 点做饭 / 室外场景不动 / 深夜光线约束）、`test_scene_context`（`scene_hour`、夜间禁白天日光、白天光线、无时间不瞎猜）、`test_dialogue`（口头禅与重复句过滤、提示词约束、「刚…」配文删句），总计 498 项通过。
+
 ## v1.6.0 分段回复（跟随 AstrBot 配置）与改名
 
 - `selfie_core/dialogue.split_reply(text, max_segments=4)`：基础切分，按句号 / 换行拆成多条消息，句号作为分段符被移除；`！？…` 是语气不拆；超过 4 段时用逗号并进最后一段。

@@ -20,12 +20,13 @@ import threading
 import uuid
 
 
-KINDS = ("costume", "closeup", "interaction", "meal")
+KINDS = ("costume", "closeup", "interaction", "meal", "selfie")
 FILENAMES = {"costume": "costumes.txt", "closeup": "closeup_prompts.txt",
-             "interaction": "interaction.txt", "meal": "meals.txt"}
+             "interaction": "interaction.txt", "meal": "meals.txt",
+             "selfie": "selfie_actions.txt"}
 # 随包默认素材的「种子版本」：升级时把新增的默认条目补进数据目录文件，
 # 用户改过/删掉的条目不会被还原（版本号相同就不再补）。
-SEED_VERSIONS = {"meal": 2}
+SEED_VERSIONS = {"meal": 2, "selfie": 1}
 SEED_MARKER = ".materials_seed.json"
 _NUMBER = re.compile(r"^\s*([0-9]+)\s*[：:.、)）]\s*")
 
@@ -44,7 +45,7 @@ class MaterialDuplicate(MaterialError):
 
 def _kind(kind):
     if kind not in KINDS:
-        raise MaterialError("kind must be costume, closeup, interaction or meal")
+        raise MaterialError("kind must be costume, closeup, interaction, meal or selfie")
     return kind
 
 
@@ -65,6 +66,13 @@ def _entry(kind, ident, text):
         if len(parts) != 2 or not parts[0] or not parts[1]:
             raise MaterialError("meal requires name | description")
         entry.update(name=parts[0], description=parts[1])
+    elif kind == "selfie":
+        # 名字 | 表情 | 另一只手的手势；只写两段时整段当表情用，手势留空由提示词兜底。
+        parts = [part.strip() for part in text.split("|")]
+        if len(parts) not in (2, 3) or not parts[0] or not all(parts):
+            raise MaterialError("selfie requires name | expression | gesture")
+        entry.update(name=parts[0], expression=parts[1],
+                     gesture=(parts[2] if len(parts) == 3 else ""))
     elif kind == "interaction":
         match = re.match(r"^(摸摸|捏捏)[：:｜| ]\s*", text)
         entry["action"] = match[1] if match else ""
@@ -334,6 +342,12 @@ class MaterialStore:
             raise MaterialError("draft must not contain a comment or numeric ID prefix")
         if kind == "costume" and len(text.split("|")) != 3:
             raise MaterialError("costume draft requires name | aliases | description")
+        if kind == "selfie":
+            parts = [part.strip() for part in text.split("|")]
+            if len(parts) != 3 or not all(parts):
+                raise MaterialError("selfie draft requires name | expression | gesture")
+            if len(parts[1]) < 4 or len(parts[2]) < 4:
+                raise MaterialError("selfie draft expression and gesture are too short")
         if kind == "meal":
             parts = [part.strip() for part in text.split("|")]
             if len(parts) != 2 or not parts[0] or not parts[1]:

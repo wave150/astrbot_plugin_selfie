@@ -167,6 +167,18 @@
     "description": "接单（咔嚓）拟声词",
     "hint": "拟人化模式下，接单回复的第一句话末尾是否加「（咔嚓）」作为接单标志；关掉就只正常回应，不加拟声词，接单照样生效"
   },
+  "role_has_hat": {
+    "type": "bool",
+    "default": false,
+    "description": "角色有帽子",
+    "hint": "角色本身有帽子时才打开。打开后生图测试的「日常服装」里会多出「脱帽经典 / 无帽无外套经典」两档；没有帽子的角色保持关闭，免得选项没用"
+  },
+  "role_has_outer": {
+    "type": "bool",
+    "default": false,
+    "description": "角色有外套",
+    "hint": "角色本身穿外套（外层衣物）时才打开。打开后「日常服装」里会多出「脱外套经典 / 无帽无外套经典」两档；没有外套的角色保持关闭"
+  },
   "allow_text_only": {
     "type": "bool",
     "default": false,
