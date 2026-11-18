@@ -7,6 +7,7 @@ Drafts are process-local, expire after 30 minutes, and never persist LLM images.
 from copy import deepcopy
 from datetime import datetime
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -16,7 +17,8 @@ import uuid
 
 from .storage import JsonStateStore
 from .materials import MaterialStore, KINDS
-from .defaults import CLASSIC_COSTUMES
+from .ref_library import ReferenceLibrary
+from . import workspace_refs
 from . import world_editor
 from . import legacy_world
 from .living import validate_event, LivingEngine
@@ -24,6 +26,8 @@ from .event_materials import migrate_event, normalize_phase_name, resolve_event
 from .overnight import overnight_list
 from .meal import MEAL_SETUPS, meal_cue
 from .sleep import SLEEP_KINDS, sleep_cue
+
+logger = logging.getLogger(__name__)
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -156,6 +160,8 @@ def _material_error(exc):
         return "素材库至少要保留一条"
     if "missing" in str(exc):
         return "素材文件不存在，请检查素材路径"
+    if "interaction draft requires" in str(exc):
+        return "互动草稿要以「动作词：【机位短语】；正文」开头"
     return "素材格式无效，请检查内容后重试"
 
 
@@ -221,10 +227,20 @@ _MEAL_INSTRUCTION = (
     "不写人物身份、面容、动作、地点或背景环境，不要编号、标题、解释、代码围栏或其他行。"
 )
 _INTERACTION_INSTRUCTION = (
-    "你只生成一条互动拍摄提示词。输出唯一一行，以摸摸:或捏捏:开头，正文至少500字。"
-    "明确画外互动手的触点、触碰方向与力度、手指和关节动作、人物反应、身体支撑关系、"
-    "镜头机位、景别及自然松弛感。不要固定人物身份、发色、服装、地点或场景，"
-    "让互动适配当前角色与实际环境。不要编号、标题、解释、代码围栏或其他行。"
+    "你只生成一条互动拍摄提示词。输出唯一一行，格式固定为：动作词：【机位短语】；正文。"
+    "动作词只能从摸摸、捏捏、戳戳、揉揉、拍拍里选一个（两个汉字，后面紧跟中文冒号）；"
+    "【】里写机位短语，6-12 个字，写清机位、景别和双手怎么互动，"
+    "例如「捏捏：【仰脸俯拍＋双手互动】；」或「摸摸：【正上方倒置俯拍】；」；"
+    "方括号机位短语后面必须是中文分号「；」，再接至少500字正文。"
+    "这是拍一张照片，不是拍视频：正文只描写按下快门那一刻定格的画面——"
+    "镜头外那只手此刻贴在哪里、用多大力度、手指和关节是什么静态姿态，"
+    "她此刻的表情和身体反应，身体的支撑与接触关系，镜头机位与景别。"
+    "禁止任何时间过程与先后顺序的写法：不要出现「先」「然后」「接着」「随后」「之后」"
+    "「最后」「逐渐」「慢慢」「缓缓」「进入」「落下」「移动」「轨迹」「过程」「分镜」"
+    "这类词，也不要写成「先…再…最后…」的连续动作；一律用「此刻正…」的静态描述，"
+    "整段正文只对应一张静止的照片。"
+    "不要固定人物身份、发色、服装、地点或场景，让互动适配当前角色与实际环境。"
+    "不要编号、标题、解释、代码围栏或其他行。"
 )
 # 「自拍动作」额外一层自拍要求：这些是前置摄像头自拍的硬约束，润色时不许被改写掉。
 _SELFIE_INSTRUCTION = (
@@ -232,10 +248,10 @@ _SELFIE_INSTRUCTION = (
     "名字 2-6 字（例如：歪头比耶）；表情写眉眼、嘴角和头部朝向；"
     "手势写「没拿手机的那只手」在做什么（比耶、托腮、比心、撩头发、挥手等）。"
     "必须满足：这是手机前置摄像头第一人称自拍，竖屏近景、只拍上半身和脸，"
-    "镜头就在画面前方；另一只手（拿手机的那只）在画面外，画面里不能出现手机、相机、"
+    "镜头就在正前方；另一只手（拿手机的那只）在镜头外，照片里不能出现手机、相机、"
     "自拍杆，也不要写「一只手拿着手机拍摄」「举着手机对镜自拍」这类描述；"
-    "表情和手势要能同时入画，不要写另一个人的手或路人视角。"
-    "不要人物身份、发色、服装、地点、背景、画风，不要编号、标题、解释、代码围栏或其他行。"
+    "表情和手势要能同时入镜，不要写另一个人的手或路人视角。"
+    "不要人物身份、发色、服装、地点、背景、风格，不要编号、标题、解释、代码围栏或其他行。"
 )
 _SCENE_INSTRUCTION = (
     "你只生成一条事件场景/地点环境描述。输出唯一一行中文正文，至少200字（200-400字）。"
@@ -691,6 +707,26 @@ class WorkspaceService:
             return same_name[0]
         raise WorkspaceError("该事件没有这件服装，请刷新事件列表后再试")
 
+    def _ref_outfit_request(self, submitted, costume_source):
+        """测试面板选了「参考图衣服」：参考图还在、名字还在，帽/外套档位和标记一致。"""
+        if costume_source not in ("daily", "ref"):
+            raise WorkspaceError("参考图衣服只能在「参考图衣服」或「日常服装」来源里用")
+        if not isinstance(submitted, dict):
+            raise WorkspaceError("参考图衣服格式无效，请刷新页面后重试")
+        image_id = str(submitted.get("image_id") or "")
+        entry = next((row for row in self.reference_library().costume_rows()
+                      if row["image_id"] == image_id), None)
+        if entry is None:
+            raise WorkspaceError("这套参考图衣服已经没有名字了，请刷新页面后重新选择")
+        hat_off = submitted.get("hat_off") is True
+        coat_off = submitted.get("coat_off") is True
+        if hat_off and not entry["hat"]:
+            raise WorkspaceError("这套衣服没有勾「可摘帽子」，请刷新页面后重试")
+        if coat_off and not entry["outer"]:
+            raise WorkspaceError("这套衣服没有勾「可脱外套」，请刷新页面后重试")
+        return {"image_id": entry["image_id"], "name": entry["name"], "path": entry["path"],
+                "hat_off": hat_off, "coat_off": coat_off}
+
     def _event_test_request(self, payload, *, need_costume=True, need_action=True):
         event = self._event_by_id(payload.get("event_id"))
         phases = event.get("phases") if isinstance(event.get("phases"), list) else []
@@ -777,8 +813,8 @@ class WorkspaceService:
         default_source = "event" if mode == "event" else "daily"
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
-        if costume_source not in ("daily", "event") or action_source not in (
-                "daily", "event", "meal", "sleep", "selfie"):
+        if costume_source not in ("daily", "event", "ref") or action_source not in (
+                "daily", "event", "meal", "sleep", "selfie", "interaction"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
         event = None
@@ -800,8 +836,12 @@ class WorkspaceService:
             request = self._overnight_test_scene(payload)
             scene, meta = request["scene"], dict(request["meta"])
 
+        ref_outfit = None
+        submitted_outfit = payload.get("ref_outfit")
+        if submitted_outfit is not None:
+            ref_outfit = self._ref_outfit_request(submitted_outfit, costume_source)
+
         costume_override = None
-        classic = None
         if costume_source == "event":
             submitted = payload.get("event_costume")
             if submitted is not None:
@@ -810,16 +850,15 @@ class WorkspaceService:
                 costume_override = request["costume"]
             if costume_override is None:
                 raise WorkspaceError("请选择事件服装")
+        elif ref_outfit is not None:
+            # 这套衣服挂在参考图上（工作台给参考图起了衣服名字），没有素材库编号
+            pass
+        elif costume_source == "ref":
+            raise WorkspaceError("请选择参考图衣服")
         else:
             costume_id = payload.get("costume_id")
-            if type(costume_id) is not int or costume_id == 0:
+            if type(costume_id) is not int or costume_id <= 0:
                 raise WorkspaceError("请选择日常服装")
-            if costume_id < 0:
-                # 经典四档：不换装，直接穿参考图里的那套；帽/外套按档位去掉。
-                classic = next((dict(item) for item in CLASSIC_COSTUMES
-                                if item["id"] == costume_id), None)
-                if classic is None:
-                    raise WorkspaceError("请选择日常服装")
 
         cue_override = None
         if action_source == "event":
@@ -874,17 +913,38 @@ class WorkspaceService:
             }}
             if meta is not None:
                 meta["selfie_action"] = str(entry.get("name") or "")
+        elif action_source == "interaction":
+            # 「互动」来源：动作 / 特写下拉里列的是互动库条目，生成时按该条目的动作词
+            # （摸摸 / 捏捏 / 戳戳……）走互动特写构图，并把正文当这次的动作要求。
+            interaction_id = payload.get("interaction_id")
+            entry = None
+            if type(interaction_id) is int:
+                entry = next((x for x in self.materials.list("interaction")
+                              if x["id"] == interaction_id), None)
+            if entry is None:
+                raise WorkspaceError("请选择互动提示词（先在「添加素材」里添加互动）")
+            action = str(entry.get("action") or "").strip()
+            text = str(entry.get("text") or "").strip()
+            if action and text.startswith(action):
+                text = re.sub(r"^" + re.escape(action) + r"\s*[：:｜|]\s*", "", text).strip()
+            cue_override = {"text": text, "kind": action}
+            if meta is not None:
+                meta["interaction_id"] = entry["id"]
+                meta["interaction_action"] = action
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 
         if costume_override is not None and meta is not None:
             meta["costume_name"] = costume_override["name"]
-        if costume_override is None and meta is not None:
+        if ref_outfit is not None and meta is not None:
+            meta["costume_name"] = ref_outfit["name"]
+            meta["ref_outfit"] = ref_outfit["image_id"]
+        if costume_override is None and ref_outfit is None and meta is not None:
             meta.pop("costume_name", None)
         try:
             image = await self.host._workspace_test(
                 deepcopy(payload), costume_override=costume_override, cue_override=cue_override,
-                scene=scene, album_meta=meta, classic=classic)
+                scene=scene, album_meta=meta, ref_outfit=ref_outfit)
         except ValueError as exc:
             raise WorkspaceError(str(exc) or "测试参数无效，请刷新页面后重试") from exc
         return {"image": image}
@@ -1006,28 +1066,37 @@ class WorkspaceService:
                 raise WorkspaceConflict("素材已更新，请刷新后重新生成草稿") from exc
             raise WorkspaceError("工作台输入无效，请检查必填项、城市区划或草稿格式") from exc
 
-    @staticmethod
-    def _config_flag(host, key, default=False):
-        getter = getattr(host, "_cfg", None)
-        if not callable(getter):
-            return bool(default)
-        try:
-            return bool(getter(key, default))
-        except Exception:
-            return bool(default)
+    def _rebase_material_draft(self, draft, text):
+        """草稿作废（文件被改过）时，按最新文件重新追加一次这条素材。
 
-    def classic_costumes(self):
-        """生图测试「日常服装」最前面的经典档位，按「角色有帽子 / 有外套」两个开关过滤。"""
-        has_hat = self._config_flag(self.host, "role_has_hat", False)
-        has_outer = self._config_flag(self.host, "role_has_outer", False)
-        rows = []
-        for item in CLASSIC_COSTUMES:
-            if item["hat_off"] and not has_hat:
-                continue
-            if item["coat_off"] and not has_outer:
-                continue
-            rows.append(dict(item))
-        return rows
+        入库只往文件末尾追加一行，所以「重新挂到最新文件」不会丢别人的改动；
+        如果这条内容已经存在，仍按重复素材报错；文件被占用等情况原样上抛。
+        """
+        kind = draft.get("material_kind")
+        try:
+            fresh = self.materials.create_draft(kind, text)
+            entry = self.materials.confirm_draft(fresh["token"])
+        except ValueError as exc:
+            if type(exc).__name__ == "MaterialConflict":
+                raise WorkspaceError("素材库正在被其它操作占用，请稍后重试") from exc
+            raise WorkspaceError(_material_error(exc)) from exc
+        logger.info(f"[selfie] 素材草稿已重新挂到最新文件并入{kind}库：#{entry.get('id')}")
+        return entry
+
+    def reference_library(self):
+        getter = getattr(self.host, "_ref_library", None)
+        if callable(getter):
+            try:
+                library = getter()
+                if isinstance(library, ReferenceLibrary):
+                    return library
+            except Exception:  # noqa: BLE001 - 宿主没准备好时退回自己建一个
+                pass
+        root = Path(getattr(self.host, "data_dir", "") or self.host.plugin_dir) / "reference_images"
+        cached = getattr(self, "_ref_library_cache", None)
+        if cached is None or cached.root != Path(root):
+            cached = self._ref_library_cache = ReferenceLibrary(root)
+        return cached
 
     async def _dispatch(self, action, payload, owner):
         owner = _text(owner, "owner")
@@ -1042,8 +1111,11 @@ class WorkspaceService:
                         "event_history": self.event_history(),
                         "home_room_defaults": deepcopy(HOME_ROOMS),
                         "overnight_scenes": overnight_list(),
-                        "classic_costumes": self.classic_costumes(),
+                        "reference_library": workspace_refs.with_builtin(
+                            self, self.reference_library().snapshot()),
                         "revision": self._document["revision"]}
+        if action in workspace_refs.REF_ACTIONS:
+            return workspace_refs.handle(self, action, payload)
         if action == "initialize_world":
             return await self._initialize_world(payload)
         if action == 'schedule':
@@ -1219,7 +1291,15 @@ class WorkspaceService:
                     return deepcopy(draft["result"])
                 text = payload.get("text", draft["text"])
                 self.materials.edit_draft(draft["material_token"], text)
-                entry = self.materials.confirm_draft(draft["material_token"])
+                try:
+                    entry = self.materials.confirm_draft(draft["material_token"])
+                except ValueError as exc:
+                    if type(exc).__name__ != "MaterialConflict":
+                        raise
+                    # 生成草稿之后素材库又被改过（最常见：刚编辑/删除了另一条）。
+                    # 入库只是往文件末尾追加一行，重新挂到最新文件再入一次不会覆盖
+                    # 别人的改动，比让用户从头再生成一次草稿靠谱。
+                    entry = self._rebase_material_draft(draft, text)
                 draft["result"] = {"kind": draft["material_kind"], "entry": entry}
                 return deepcopy(draft["result"])
         if action == "draft_city":

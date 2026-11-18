@@ -4,6 +4,7 @@ No framework, filesystem, network, clock or random access. Legacy presets remain
 in their compatibility path; custom profiles never inherit that identity.
 """
 from .character import CharacterProfile
+from .defaults import WINTER_REF_CAPTION, WINTER_REF_CUSTOM_OUTFIT_TEXT, WINTER_REF_NAME
 from .scene_context import scene_context_text
 
 
@@ -162,12 +163,15 @@ def can_change_clothes(scene, *, force=False, legacy=False) -> bool:
 
 def resolve_custom_look(profile: CharacterProfile, scene, removal=None, costume=None,
                         force_costume=False, clothing_policy=None,
-                        clothing_access=None, stage_outfit=None, stage_exclusive=False):
+                        clothing_access=None, stage_outfit=None, stage_exclusive=False,
+                        winter_ref=False):
     """自定义角色的这一身。
 
     clothing_access 由调用方用 can_change_clothes 算好传进来（None = 旧的
     slot/event 规则，保持兼容）；stage_outfit 是场景声明的这套服装（事件阶段
     outfit 也在其中），stage_exclusive=True 表示它是事件服装、点单衣服不能打破它。
+    winter_ref=True：今天有冬装参考图，没换装时衣服交给参考图，不再用
+    outfit_winterwear 的提示词补冬衣。
     """
     removal = removal or {}
     if not isinstance(scene, dict):
@@ -192,10 +196,16 @@ def resolve_custom_look(profile: CharacterProfile, scene, removal=None, costume=
             selected = str(policy.get('sleepwear') or '不透明的宽松长袖家居睡衣和长裤')
         elif scene.get('type') == 'school':
             selected = str(policy.get('schoolwear') or '')
-        elif scene.get('type') in ('outdoor', 'snow'):
+        elif scene.get('type') in ('outdoor', 'snow') and not winter_ref:
             temp = (scene.get('weather') or {}).get('temp')
             if isinstance(temp, (int, float)) and temp <= 10:
                 selected = str(policy.get('winterwear') or '保暖外套、完整内层服装、长裤和围巾')
+    ref_outfit = False
+    if winter_ref and not change:
+        # 冬装参考图生效：整套衣服以参考图为准，冬季服装提示词不再叠加
+        selected = ''
+        outfit = WINTER_REF_CUSTOM_OUTFIT_TEXT
+        ref_outfit = True
     if selected:
         outfit = selected
     hat = '' if removal.get('hat_off') or change or scene.get('slot') == 'sleep' else profile.default_hat
@@ -208,28 +218,32 @@ def resolve_custom_look(profile: CharacterProfile, scene, removal=None, costume=
         notes.append('这次移除最外层外套，保留角色内层完整服装；没有外套时保持原服装。')
     return dict(hat=hat, hair=profile.hair or '保持当前角色参考图中的发型和发色',
                 necklace=False, outer='',inner='',bottom='',extra='',full=outfit,
-                name=str(chosen.get('name') or '换装') if change else ('场景服装' if selected else '角色默认服装'),
-                caption=str(chosen.get('name') or '') if change else '',
+                name=str(chosen.get('name') or '换装') if change else (
+                    WINTER_REF_NAME if ref_outfit
+                    else ('场景服装' if selected else '角色默认服装')),
+                caption=(str(chosen.get('name') or '') if change
+                         else (WINTER_REF_CAPTION if ref_outfit else '')),
                 negative_extra=[],edit_note=''.join(notes),
                 hat_off=bool(removal.get('hat_off')),coat_off=bool(removal.get('coat_off')),
-                no_hat_clause='头部外观保持当前角色设定一致',mood='',restyle=bool(change or selected))
+                no_hat_clause='头部外观保持当前角色设定一致',mood='',
+                ref_outfit=ref_outfit, restyle=bool(change or selected))
 
 
 def build_custom_prompt(profile, scene, look, *, style='realistic', kind='selfie',
                         cue='', costume_description='', interaction=False, costume_reference=False):
     style_text = ('写实照片质感、真实摄影光影与自然皮肤纹理' if style == 'realistic'
-                  else '二次元动画风格，线条与色彩保持一致')
+                  else '二次元动漫风格，线条与色彩保持一致')
     identity = profile.description or '外观、脸部、体型与当前角色参考图保持一致'
     parts = [f'当前唯一角色：{profile.name or "参考图中的原创角色"}。',
              f'角色身份要求：{identity}。',
              f'发型要求：{profile.hair or "按当前角色参考图"}。',
-             f'画面风格：{style_text}。']
+             f'照片风格：{style_text}。']
     if kind == 'cosplay' or costume_reference:
         parts.append('参考图1用于当前角色身份，额外角色图只用于服装，不替换当前角色的脸、发色或身份。')
     if kind == 'closeup':
-        parts.append('这是画外相机拍摄的近距离特写，具体景别和机位以本次构图要求为准。')
+        parts.append('这是镜头外相机拍摄的近距离特写，具体景别和机位以本次构图要求为准。')
     else:
-        parts.append('这是角色自己的近距离自拍，画面中不出现手机、相机或自拍杆。')
+        parts.append('这是角色自己的近距离自拍，照片中不出现手机、相机或自拍杆。')
     wear = costume_description or look.get('full') or profile.default_outfit or '保留身体参考图的服装'
     parts.append(f'本次服装：{wear}。')
     if look.get('hat'):
@@ -240,5 +254,5 @@ def build_custom_prompt(profile, scene, look, *, style='realistic', kind='selfie
     parts.append('场景与氛围：' + str(scene.get('desc') or '自然生活场景') + '。')
     parts.append(scene_context_text(scene))
     parts.append('保持人物与支撑面、家具的接触和透视一致。手部结构清晰自然，不出现文字、水印或边框。')
-    parts.append('允许构图要求中明确指定的画外互动手。' if interaction else '画面只出现当前角色一人。')
+    parts.append('允许构图要求中明确指定的镜头外互动手。' if interaction else '照片只出现当前角色一人。')
     return '\n'.join(p for p in parts if p)

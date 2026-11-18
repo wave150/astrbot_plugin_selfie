@@ -74,7 +74,9 @@ def _entry(kind, ident, text):
         entry.update(name=parts[0], expression=parts[1],
                      gesture=(parts[2] if len(parts) == 3 else ""))
     elif kind == "interaction":
-        match = re.match(r"^(摸摸|捏捏)[：:｜| ]\s*", text)
+        # 行首「动作词：」决定这条归哪个互动触发词；库里新加的动作词会自动生效。
+        # 兼容旧格式「摸摸：镜头外…」和新格式「捏捏：【仰脸俯拍＋双手互动】；…」。
+        match = re.match(r"^([\u4e00-\u9fff]{1,3})\s*[：:｜|]\s*", text)
         entry["action"] = match[1] if match else ""
     return entry
 
@@ -354,6 +356,10 @@ class MaterialStore:
                 raise MaterialError("meal draft requires name | description")
             if len(parts[1]) < 20:
                 raise MaterialError("meal description is too short; describe the dish and tableware")
+        if kind == "interaction":
+            # 每条互动提示词都必须以「动作词：【机位短语】；正文」开头，匹配和自动识别都靠它。
+            if not re.match(r"^[\u4e00-\u9fff]{1,3}\s*[：:]\s*【[^】]+】\s*[；;]", text):
+                raise MaterialError("interaction draft requires 动作词：【机位短语】；正文")
         return _entry(kind, 0, text)
 
     def create_draft(self, kind, text):

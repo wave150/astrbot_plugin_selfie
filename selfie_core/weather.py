@@ -26,6 +26,41 @@ async def fetch_current_weather(lat, lon):
             return await response.json(content_type=None)
 
 
+async def fetch_daily_mean(lat, lon):
+    """当日平均气温（Open-Meteo daily），只取今天这一天；调用方负责缓存与降级。"""
+    import aiohttp
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&daily=temperature_2m_mean"
+        "&timezone=Asia%2FShanghai&forecast_days=1"
+    )
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            return await response.json(content_type=None)
+
+
+def parse_daily_mean(data):
+    """当日平均气温；缺数据时抛错，不拿 0℃ 冒充（0℃ 会被当成「今天很冷」）。"""
+    daily = data.get("daily") if isinstance(data, dict) else None
+    if not isinstance(daily, dict):
+        raise ValueError("daily weather must contain daily data")
+    values = daily.get("temperature_2m_mean")
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("temperature_2m_mean must be a non-empty list")
+    value = values[0]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("temperature_2m_mean must be a finite number")
+    try:
+        value = float(value)
+    except OverflowError as exc:
+        raise ValueError("temperature_2m_mean must be a finite number") from exc
+    if not math.isfinite(value):
+        raise ValueError("temperature_2m_mean must be a finite number")
+    return round(value, 1)
+
+
 def parse_current_weather(data):
     """Reject missing data instead of inventing clear weather at zero degrees."""
     current = data.get("current") if isinstance(data, dict) else None

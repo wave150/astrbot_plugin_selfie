@@ -8,6 +8,7 @@ import asyncio
 import base64
 import os
 import re
+import time
 import aiohttp
 from astrbot.api import logger
 from .defaults import *
@@ -137,7 +138,13 @@ class ImageTransportMixin:
     async def _generate_impl(self, prompt: str, model: str,
                         style: str | None = None,
                         negative_extra: list[str] | None = None,
-                        extra_images: list[str] | None = None) -> bytes:
+                        extra_images: list[str] | None = None,
+                        ref: str | None = None,
+                        face_ref: str | None = None,
+                        single_ref: str | None = None,
+                        head_only: bool = False,
+                        main_refs: tuple | list | None = None,
+                        backup_refs: tuple | list | None = None) -> bytes:
         api_base, api_key = self._api()
         if not api_base or not api_key:
             raise RuntimeError("没有配置生图主站地址或密钥")
@@ -163,9 +170,19 @@ class ImageTransportMixin:
                 self._last_img_at = self.clock.time()
                 host = re.sub(r"^https?://", "", base).split("/")[0]
                 try:
-                    return await self._generate_openai(
-                        prompt, mdl, base, key, extra_images, style, 1, max_refs
+                    started = time.monotonic()
+                    # 工作台「参考图」页显式配了站点参考图：按站点直接给，不再自动挑
+                    site_refs = tuple(main_refs or ()) if kind == "primary" \
+                        else tuple(backup_refs or ())
+                    image = await self._generate_openai(
+                        prompt, mdl, base, key, extra_images, style, 1, max_refs,
+                        ref=ref, face_ref=face_ref, single_ref=single_ref,
+                        head_only=head_only, refs=site_refs or None,
                     )
+                    logger.info(
+                        f"[selfie] 生图成功 {host} / {mdl}，用时 {time.monotonic() - started:.1f}s"
+                    )
+                    return image
                 except Exception as e:
                     # 额度不足 / key 失效：换站换模型都没用，直接上抛
                     if self._is_quota_error(e) or "HTTP 401" in str(e):
@@ -184,28 +201,73 @@ class ImageTransportMixin:
 
 
 
+    def _openai_refs(self, style, extra_images=None, max_refs=2,
+                     ref: str | None = None, face_ref: str | None = None,
+                     single_ref: str | None = None,
+                     head_only: bool = False,
+                     refs: tuple | list | None = None):
+        """这次 /images/edits 要贴的（主参考图, 附加脸部参考图）。
+
+        - refs 有值（工作台「参考图」页按站点配好的图片）：直接按顺序贴，
+          按站点张数上限截断，不再自动补图。
+        - 换装（head_only）：衣服由提示词决定，参考图只贴头部——多图站点贴
+          「正脸 + 侧头」，单图站点只贴正脸；不再自动补全身照或脸部特写。
+        - 多图站点：主参考图 + 脸部参考图（真人风格）；cos 双图时脸让位给角色图。
+        - 单图站点（副站只吃 1 张）：
+          · 睡觉房间优先贴素颜三视图（face_ref），夜里卸妆的脸最重要；
+          · 其它时候贴 single_ref（冬装 = 脸部正面 + 冬装正面的拼接照），
+            没有再用 ref 或原来的自动参考图。
+        """
+        extra = [x for x in (extra_images or []) if x]
+        explicit = [str(x) for x in (refs or ()) if x]
+        if explicit:
+            chosen = explicit[:max(1, int(max_refs))]
+            return chosen[0], (chosen[1] if len(chosen) > 1 else "")
+        if head_only:
+            primary = ref or face_ref or ""
+            if max_refs < 2:
+                return primary, ""
+            return primary, (face_ref if (ref and face_ref) else "")
+        if max_refs < 2:
+            if face_ref:
+                return face_ref, ""
+            return (single_ref or ref or self._pick_ref(style, single=True)), ""
+        primary = ref or self._pick_ref(style, single=False)
+        face = ""
+        if not (extra and primary):
+            face = face_ref or self._face_ref(style)
+        return primary, face
+
     async def _generate_openai(self, prompt: str, model: str,
                                api_base: str, api_key: str,
                                extra_images: list[str] | None = None,
                                style: str | None = None,
                                max_attempts: int = 6,
-                               max_refs: int = 2) -> bytes:
+                               max_refs: int = 2,
+                               ref: str | None = None,
+                               face_ref: str | None = None,
+                               single_ref: str | None = None,
+                               head_only: bool = False,
+                               refs: tuple | list | None = None) -> bytes:
         """标准 OpenAI 图片接口：有参考图走 /images/edits，否则 /images/generations。
 
-        参考图按画风选：二次元版贴二次元三视图，真人版贴真人三视图（真人版再多贴一张脸部特写）。
+        参考图按风格选：二次元版贴二次元三视图，真人版贴真人三视图（真人版再多贴一张脸部特写）。
+        ref / face_ref 有值时优先用它们（低温日冬装参考图、睡觉房间素颜脸部参考图），
+        不再按风格自动挑；调用方保证路径存在。单图站点只贴一张时，睡觉房间优先
+        贴素颜三视图（见 ``_openai_refs``）。
         中转平台/上游会随机返回 400 upstream_request_rejected 或 5xx（同一请求 400 之后重发就能 200），
         所以这里带重试 + 换站；**有参考图时不再退回纯文生图**（纯文生图不像她），
         只有一张参考图都找不到、或显式打开 allow_text_only 时才走 /images/generations。
         """
         size = str(self._cfg("image_size", DEFAULT_OPENAI_SIZE) or DEFAULT_OPENAI_SIZE)
         headers = {"Authorization": "Bearer " + api_key, "User-Agent": BROWSER_UA}
-        timeout = aiohttp.ClientTimeout(total=600)
-        ref = self._pick_ref(style, single=(max_refs < 2))
-        # 真人风格额外贴一张脸部特写（cos 双图模式已有自己的图序，不掺进去）
-        # max_refs=1 时不加这张 —— 备用站只吃一张参考图
-        face_ref = ""
-        if max_refs >= 2 and not (extra_images and ref):
-            face_ref = self._face_ref(style)
+        # 单次请求最多等 3 分钟：实测健康时一张图约 40 秒，超过 3 分钟基本是上游
+        # 排队/卡住。超时就换下一个模型/副站，别让一张图把 10 分钟全耗在同一条链路上。
+        timeout = aiohttp.ClientTimeout(total=180)
+        ref, face_ref = self._openai_refs(style, extra_images, max_refs,
+                                          ref=ref, face_ref=face_ref,
+                                          single_ref=single_ref, head_only=head_only,
+                                          refs=refs)
         # 0 = 连接异常；400/403 = 中转平台随机的 upstream_request_rejected（同一提示词重试可过）
         # 实测同一个请求 400 之后立刻重发就能 200，所以多给几次机会、退避时间也拉长
         retryable = {0, 400, 403, 408, 425, 429, 500, 502, 503, 504}

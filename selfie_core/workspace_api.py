@@ -21,7 +21,10 @@ _ACTIONS = frozenset({"bootstrap", "test", "try_costume", "draft_material", "con
                       "draft_city", "confirm_city", "add_city", "save_world", "save_events",
                       "lookup_city", "generate_event_fragment",
                       "album_list", "album_thumb", "album_image",
-                      "diaries", "schedule", "job"})
+                      "diaries", "schedule", "job", "cancel_job",
+                      "ref_library", "save_ref_image", "delete_ref_image", "rename_ref_image",
+                      "save_ref_slots", "save_ref_conditions", "ref_image",
+                      "adopt_builtin_refs", "save_ref_costume"})
 _BACKGROUND = frozenset({"test", "try_costume", "draft_material", "draft_city", "initialize_world",
                          "generate_event_fragment"})
 # Process-level admission, including overlapping plugin instances during reload.
@@ -70,16 +73,54 @@ _SAFE_MESSAGES = frozenset({
     "这座城市已经有地点了，请直接用「重新生成城市」",
     "家区县必须属于该城市，请重新选择",
     "素材内容或名称与已有条目重复",
+    "素材库正在被其它操作占用，请稍后重试",
     "素材编号不存在，请刷新素材列表",
     "素材库至少要保留一条",
     "素材文件不存在，请检查素材路径",
     "素材格式无效，请检查内容后重试",
+    "互动草稿要以「动作词：【机位短语】；正文」开头",
     "场景描述格式无效", "动作描述格式无效",
     "测试场景类型无效，请刷新页面后重试",
     "服装/动作来源无效，请刷新页面后重试",
     "请选择日常服装",
+    "请选择参考图衣服",
+    "参考图衣服只能在「参考图衣服」或「日常服装」来源里用",
+    "参考图衣服格式无效，请刷新页面后重试",
+    "这套参考图衣服已经没有名字了，请刷新页面后重新选择",
+    "这套衣服没有勾「可摘帽子」，请刷新页面后重试",
+    "这套衣服没有勾「可脱外套」，请刷新页面后重试",
     "请选择日常特写",
+    "请选择互动提示词（先在「添加素材」里添加互动）",
+    "参考图数据无效，请重新选择图片",
+    "参考图格式无效，请上传 PNG / JPEG / WebP",
+    "参考图过大，请压缩到 12MB 以内",
+    "参考图像素过大，请压缩后再上传",
+    "参考图过大，无法在页面预览",
+    "参考图是空的，请重新选择图片",
+    "参考图不存在，请刷新后重试",
+    "参考图读取失败，请重新上传",
+    "参考图名称太长（最多 40 个字）",
+    "参考图编号太长（最多 40 个字）",
+    "参考图设置格式无效",
+    "所选参考图不存在，请刷新后重试",
+    "条件参考图格式无效",
+    "条件参考图要先选一张已上传的图片",
+    "条件参考图引用的图片不存在，请刷新后重试",
+    "条件参考图要选至少一个要替换的参考图位置",
+    "条件参考图最多 50 条",
+    "条件类型无效，请选择日期 / 气温 / 概率",
+    "气温条件要选「低于」或「高于」",
+    "气温阈值要在 -60 到 60 之间",
+    "日期条件要填月份和日期",
+    "日期条件的月或日无效",
+    "概率要在 1 到 100 之间",
+    "第二张参考图引用的图片不存在，请刷新后重试",
+    "第二张参考图要先勾上「主站参考图2」或「副站参考图2」",
+    "参考图操作无效，请刷新页面后重试",
     "测试参数无效，请刷新页面后重试",
+    "已取消这次生图",
+    "页面已关闭，已取消这次生图",
+    "任务已取消",
 })
 
 
@@ -89,6 +130,12 @@ def safe_error(exc):
         return "数据已变化，请刷新后重新操作"
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return '工作台任务超时，请减少本次数量后重试；已有数据未改动'
+    if type(exc).__name__ == "RefLibraryError":
+        # 参考图库的错误都是自己写的中文短句（字段名 + 数字），可以直接给用户看。
+        message = str(exc)
+        if message and len(message) <= 80 and "\\" not in message and "/" not in message:
+            return message
+        return "参考图设置无效，请刷新页面后重试"
     if isinstance(exc, ValueError):
         message = str(exc)
         if message in _SAFE_MESSAGES:
@@ -109,6 +156,9 @@ class WorkspaceAPI:
     JOB_TTL = 15 * 60
     JOB_TIMEOUT = 12 * 60
     MAX_RUNNING = 3
+    # 付费生图任务：页面不再轮询这么久就自动取消（退出工作台/关页后不会白跑）
+    UNSEEN_CANCEL = 90.0
+    IMAGE_ACTIONS = frozenset({"test", "try_costume"})
 
     def __init__(self, host, service):
         self.host = host
@@ -117,6 +167,7 @@ class WorkspaceAPI:
         self._closed = False
         self._jobs = {}
         self._tasks = set()
+        self._watchers = set()
         self._handler = self.handle  # Stable identity for replacement-safe teardown.
 
     def register(self, context):
@@ -167,7 +218,8 @@ class WorkspaceAPI:
                 raise ValueError("Result limit")
             job.update(state="done", result=result)
         except asyncio.CancelledError:
-            job.update(state="error", error="Job cancelled")
+            if job["state"] == "running":
+                job.update(state="error", error="任务已取消")
             raise
         except Exception as exc:
             job.update(state="error", error=safe_error(exc))
@@ -184,13 +236,57 @@ class WorkspaceAPI:
             raise _Rejected("Job capacity reached; retry after expiry", 429)
         job_id = uuid.uuid4().hex
         job = {"owner": owner, "state": "running", "result": None,
-               "error": None, "finished": None}
+               "error": None, "finished": None, "task": None,
+               "seen": time.monotonic(),
+               "cancel_unseen": action in self.IMAGE_ACTIONS}
         self._jobs[job_id] = job
         task = asyncio.create_task(self._run(job, action, payload, owner))
+        job["task"] = task
         self._tasks.add(task)
         _ACTIVE[task] = owner
         task.add_done_callback(self._task_done)
+        if job["cancel_unseen"]:
+            self._watch(job_id)
         return {"job_id": job_id}
+
+    def _watch(self, job_id):
+        """付费生图：页面不再轮询（退出工作台/关页）就取消任务，别让它在后台空跑。"""
+        async def watch():
+            try:
+                while True:
+                    await asyncio.sleep(min(5.0, self.UNSEEN_CANCEL))
+                    job = self._jobs.get(job_id)
+                    if job is None or job["state"] != "running":
+                        return
+                    if time.monotonic() - job.get("seen", 0) <= self.UNSEEN_CANCEL:
+                        continue
+                    task = job.get("task")
+                    if task is not None and not task.done():
+                        job.update(state="error", error="页面已关闭，已取消这次生图",
+                                   finished=time.monotonic())
+                        task.cancel()
+                    return
+            except asyncio.CancelledError:
+                raise
+            finally:
+                watcher = asyncio.current_task()
+                if watcher is not None:
+                    self._watchers.discard(watcher)
+
+        watcher = asyncio.create_task(watch())
+        self._watchers.add(watcher)
+
+    def _cancel(self, payload, owner):
+        job_id = payload.get("job_id")
+        job = self._jobs.get(job_id) if isinstance(job_id, str) else None
+        if job is None or job["owner"] != owner:
+            raise _Rejected("Job not found", 404)
+        if job["state"] == "running":
+            job.update(state="error", error="已取消这次生图", finished=time.monotonic())
+            task = job.get("task")
+            if task is not None and not task.done():
+                task.cancel()
+        return {"job_id": job_id, "state": job["state"]}
 
     def _task_done(self, task):
         self._tasks.discard(task)
@@ -237,7 +333,11 @@ class WorkspaceAPI:
                 job = self._jobs.get(job_id) if isinstance(job_id, str) else None
                 if job is None or job["owner"] != owner:
                     raise _Rejected("Job not found", 404)
+                if job["state"] == "running":
+                    job["seen"] = time.monotonic()
                 data = {key: job[key] for key in ("state", "result", "error")}
+            elif action == "cancel_job":
+                data = self._cancel(payload, owner)
             elif action in _BACKGROUND:
                 data = self._start(action, payload, owner)
             else:
@@ -260,13 +360,17 @@ class WorkspaceAPI:
                            if not (entry[0] == _ROUTE and entry[1] is self._handler)]
             self._context = None
         tasks = tuple(self._tasks)
+        watchers = tuple(self._watchers)
         for task in tasks:
             task.cancel()
+        for watcher in watchers:
+            watcher.cancel()
         try:
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            if tasks or watchers:
+                await asyncio.gather(*tasks, *watchers, return_exceptions=True)
         finally:
             for task in tasks:
                 if task.done():
                     self._task_done(task)
+            self._watchers.clear()
             self._jobs.clear()

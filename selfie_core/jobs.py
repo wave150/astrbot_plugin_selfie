@@ -89,12 +89,40 @@ class PhotoRequest:
     style: str | None = None
     negative_extra: tuple[str, ...] = ()
     extra_images: tuple[str, ...] = ()
+    # 参考图替换（低温日冬装 / 睡觉房间素颜）；空串表示按原来的规则自动挑
+    ref: str = ""
+    face_ref: str = ""
+    # 单图站点（只吃 1 张参考图）专用的人物参考图（冬装拼接图等）
+    single_ref: str = ""
+    # 换装：衣服由提示词决定，参考图只贴头部（正脸 [+ 侧头]），不贴穿参考图衣服的全身照
+    head_only: bool = False
+    # 工作台「参考图」页显式指定的站点参考图（按站点分）；非空时不再自动挑图
+    main_refs: tuple[str, ...] = ()
+    backup_refs: tuple[str, ...] = ()
 
     def __post_init__(self):
         if not isinstance(self.prompt, str) or not isinstance(self.model, str):
             raise TypeError("prompt and model must be strings")
         if self.style is not None and not isinstance(self.style, str):
             raise TypeError("style must be a string or None")
+        if not isinstance(self.head_only, bool):
+            raise TypeError("head_only must be a bool")
+        for name in ("main_refs", "backup_refs"):
+            values = getattr(self, name)
+            if values is None:
+                values = ()
+            if isinstance(values, (str, bytes)):
+                raise TypeError(name + " must be a sequence of strings")
+            snapshot = tuple(values)
+            if not all(isinstance(value, str) for value in snapshot):
+                raise TypeError(name + " must contain only strings")
+            object.__setattr__(self, name, snapshot)
+        for name in ("ref", "face_ref", "single_ref"):
+            value = getattr(self, name)
+            if value is None:
+                object.__setattr__(self, name, "")
+            elif not isinstance(value, str):
+                raise TypeError(name + " must be a string or None")
         for name in ("negative_extra", "extra_images"):
             values = getattr(self, name)
             if values is None:
@@ -129,6 +157,10 @@ class PhotoUseCase:
                 prompt=request.prompt, model=request.model, style=request.style,
                 negative_extra=list(request.negative_extra) or None,
                 extra_images=list(request.extra_images) or None,
+                ref=request.ref or None, face_ref=request.face_ref or None,
+                single_ref=request.single_ref or None,
+                head_only=request.head_only,
+                main_refs=request.main_refs, backup_refs=request.backup_refs,
             )
             if not isinstance(result, bytes):
                 raise TypeError("Photo generator must return bytes")

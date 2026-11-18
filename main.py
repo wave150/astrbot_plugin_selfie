@@ -4,7 +4,7 @@
 会按时间出门上班、吃饭、换装、睡觉，也在自己生活的现场拍自拍、特写和互动照。
 
 默认预设仍兼容旧角色：一个二次元少女；插件不内置任何城市数据
-- 自拍：第一人称手机前置摄像头视角（画面里不出现手机），白天在外、晚上在床上穿睡衣
+- 自拍：第一人称手机前置摄像头视角（照片里不出现手机），白天在外、晚上在床上穿睡衣
 - 天气：按角色所在地实时查询，下雪穿棉袄堆雪人，夏天晴天去泳池边
 - 场景锁定：生成一张照片后，1 小时内地点/场景不变
 - 每天有自己的活动；每 2~4 天自动发一条带图 QQ 空间说说
@@ -15,6 +15,7 @@
 
 import asyncio
 import base64
+from datetime import datetime
 import json
 import os
 import random
@@ -53,13 +54,15 @@ try:  # AstrBot package loader
     from .selfie_core.workspace_host import WorkspaceHostMixin
     from .selfie_core.workspace import HOME_ROOMS
     from .selfie_core.language import character_text
-    from .selfie_core.scene_context import scene_context_text, local_datetime, lighting_text
+    from .selfie_core.scene_context import scene_context_text, local_datetime, lighting_text, scene_hour
     from .selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from .selfie_core.living import photo_variation
     from .selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from .selfie_core.sleep import sleep_photo
     from .selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
-    from .selfie_core import dialogue
+    from .selfie_core import dialogue, ref_swap
+    from .selfie_core import ref_library
+    from .selfie_core.weather import fetch_daily_mean, parse_daily_mean
 except ImportError:  # direct local test import
     from selfie_core.defaults import *
     from selfie_core.defaults import _COSTUME_EXCLUDE, _COSTUME_RE, _COSTUME_HINT_PAT
@@ -78,13 +81,15 @@ except ImportError:  # direct local test import
     from selfie_core.workspace_host import WorkspaceHostMixin
     from selfie_core.workspace import HOME_ROOMS
     from selfie_core.language import character_text
-    from selfie_core.scene_context import scene_context_text, local_datetime, lighting_text
+    from selfie_core.scene_context import scene_context_text, local_datetime, lighting_text, scene_hour
     from selfie_core.materials import (FILENAMES, SEED_VERSIONS, MaterialStore, ensure_files, merge_seed, parse_materials)
     from selfie_core.living import photo_variation
     from selfie_core.event_materials import action_name, active_event, phase_label, scene_label
     from selfie_core.sleep import sleep_photo
     from selfie_core.meal import meal_photo, meal_photo_prompt, meal_text
-    from selfie_core import dialogue
+    from selfie_core import dialogue, ref_swap
+    from selfie_core import ref_library
+    from selfie_core.weather import fetch_daily_mean, parse_daily_mean
 
 
 class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
@@ -131,9 +136,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             self.plugin_dir, "assets", "ref_real_front_9x16.png"
         )
         self.ref_real_face_path = os.path.join(self.plugin_dir, "assets", "ref_real_face.png")
+        # 换装时只贴头部：正脸 + 侧头，避免参考图里的衣服串到新衣服上
+        self.ref_real_head_side_path = os.path.join(
+            self.plugin_dir, "assets", "ref_real_head_side.png"
+        )
         # 单图模式专用的「身体 + 脸」合并参考图（只贴一张时比三视图正面像）
         self.ref_real_body_path = os.path.join(
             self.plugin_dir, "assets", "ref_real_faceandbody.png"
+        )
+        # 参考图替换：夜里睡觉房间的素颜脸部参考图 / 低温日全天的冬装人物参考图
+        self.ref_suyan_path = os.path.join(self.plugin_dir, "assets", "ref_suyan.png")
+        self.ref_winter_path = os.path.join(self.plugin_dir, "assets", "ref_winter.png")
+        # 单图站点专用的冬装参考图：原脸部正面照 + 冬装正面拼接成一张
+        self.ref_winter_single_path = os.path.join(
+            self.plugin_dir, "assets", "ref_winter_single.png"
         )
         self.state = {
             "date": "", "count": 0, "next_qzone_at": 0,
@@ -178,6 +194,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     def rng(self, value):
         self._rng = value
 
+    # 一张图从发起请求到收图的最长总时长（秒）。上游排队/卡住时不能无限等：
+    # 超过就中止并回一句失败提示，把 _generating 锁放掉，后面的请求才能继续。
+    IMAGE_TOTAL_TIMEOUT = 600
+
     def _spawn_task(self, coro):
         supervisor = getattr(self, "_task_supervisor", None)
         if supervisor is None:
@@ -186,12 +206,42 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return supervisor.spawn(coro)
 
     async def _generate(self, prompt: str, model: str, style: str | None = None,
-                        negative_extra=None, extra_images=None) -> bytes:
+                        negative_extra=None, extra_images=None,
+                        ref: str | None = None, face_ref: str | None = None,
+                        single_ref: str | None = None,
+                        head_only: bool = False,
+                        main_refs=None, backup_refs=None) -> bytes:
         use_case = getattr(self, "_photo_use_case", None)
         if use_case is None:
             use_case = self._photo_use_case = PhotoUseCase(self._generate_impl)
-        return await use_case.execute(PhotoRequest(prompt, model, style,
-                                                  tuple(negative_extra or ()), tuple(extra_images or ())))
+        request = PhotoRequest(prompt, model, style,
+                               tuple(negative_extra or ()), tuple(extra_images or ()),
+                               ref or "", face_ref or "", single_ref or "",
+                               head_only=bool(head_only),
+                               main_refs=tuple(main_refs or ()),
+                               backup_refs=tuple(backup_refs or ()))
+        try:
+            return await asyncio.wait_for(
+                use_case.execute(request), timeout=float(self.IMAGE_TOTAL_TIMEOUT)
+            )
+        except asyncio.TimeoutError as e:
+            raise RuntimeError(
+                f"生图超时：{self.IMAGE_TOTAL_TIMEOUT} 秒内没拿到图，已中止"
+                "（上游排队或卡住）"
+            ) from e
+
+    def _generation_failure_text(self, error, generic: str = "拍糊了，等我缓缓再拍……") -> str:
+        """出图失败时回哪句话：额度不足、超时、其它分开说，别让人以为插件没反应。"""
+        try:
+            if self._is_quota_error(error):
+                return BALANCE_FAIL_TEXT
+        except Exception:
+            pass
+        text = str(error or "")
+        if (isinstance(error, (asyncio.TimeoutError, TimeoutError))
+                or "超时" in text or "超过" in text):
+            return "这张拍太久卡住了，我先停下，过一会儿再给你拍～"
+        return generic
 
     async def _custom_character_text(self, instruction, fallback):
         chat = None
@@ -213,13 +263,16 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return SELFIE_PAT.search(normalized)
 
     def _interaction_match(self, text):
-        profile = self._profile()
-        if not profile.is_custom:
-            return INTERACT_PAT.search(text)
-        names = [re.escape(x) for x in (profile.name, *profile.aliases) if x]
-        if not names:
+        """语句里出现的第一个互动触发词（摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍……）。
+
+        触发词来自内置表 + 互动库行首的动作词：库里加一条「亲亲：…」就自动多一个
+        可触发的词。群聊里是否真的接单仍由 _can_trigger 把关。
+        """
+        if not text:
             return None
-        return re.search(r"(摸摸|捏捏)\s*(?:一下)?\s*(?:" + "|".join(names) + ")", text or "")
+        words = self._interact_triggers()
+        pattern = "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True))
+        return re.search(r"(" + pattern + r")(?:\s*(?:一下|下))?", text)
 
     def _profile(self):
         active = getattr(self, "_active_profile", None)
@@ -329,32 +382,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         rec["count"] = int(rec.get("count", 0) or 0) + 1
         self._save_state()
 
-    # ---------------- 节日 / 睡衣 ----------------
-    def _holiday_override(self) -> str:
-        raw = str(self._cfg("holiday_override", "") or "").strip().lower()
-        return HOLIDAY_ALIASES.get(raw, "")
-
-    @staticmethod
-    def _holiday_for(date_str: str) -> str:
-        """date_str='YYYY-MM-DD' -> halloween / christmas / spring_festival / ''。"""
-        try:
-            year, month, day = (int(x) for x in str(date_str).split("-"))
-        except Exception:
-            return ""
-        if (month, day) == (10, 31):
-            return "halloween"
-        if (month, day) == (12, 25):
-            return "christmas"
-        if SPRING_FESTIVAL_DATES.get(year) == (month, day):
-            return "spring_festival"
-        return ""
-
-    def _today_holiday(self) -> str:
-        override = self._holiday_override()
-        if override:
-            return override
-        return self._holiday_for(self._today())
-
+    # ---------------- 睡衣 ----------------
     @staticmethod
     def _night_key(now: float) -> str:
         """一个「晚上」的标识：22:00~次日 07:00 算同一晚（凌晨算前一天）。"""
@@ -448,7 +476,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     def _resolve_look(self, scene: dict, removal: dict | None = None,
                       month: int | None = None,
                       costume: dict | None = None,
-                      force_costume: bool = False) -> dict:
+                      force_costume: bool = False,
+                      style: str | None = None,
+                      ref_outfit: dict | None = None) -> dict:
         """解析这一张自拍穿什么。
 
         返回 dict：hat/hair/outer/inner/bottom/extra/full/necklace，以及
@@ -456,11 +486,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         month 只在测试里用，平时取当前月份；costume 是点单换装（能不能换由
         _clothing_access 判定）；scene["outfit"] 是 living 引擎写的事件阶段服装，
         字符串或 dict 都行，优先于点单衣服，只有管理员 force 能盖过它。
+        style 只用来判断这次会不会用冬装参考图。
         """
         scene = scene if isinstance(scene, dict) else {}
         profile = self._profile()
+        winter_ref = self._winter_ref_active(style)
         # scene["outfit"] 平时是 world 写回来的「当前这身」回显（字符串），只有事件场景
-        # 才是 living 引擎给的阶段服装；回显不能再被当成「要重画的新服装」。
+        # 才是 living 引擎给的阶段服装；回显不能再被当成「要重拍的新服装」。
         stage = event_outfit(scene)
         if profile.is_custom:
             return resolve_custom_look(profile, scene, removal, costume, force_costume,
@@ -468,7 +500,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                                                         for key in ('sleepwear', 'schoolwear', 'winterwear')},
                                        clothing_access=self._clothing_access(scene),
                                        stage_outfit=stage,
-                                       stage_exclusive=bool(stage))
+                                       stage_exclusive=bool(stage),
+                                       winter_ref=winter_ref)
         removal = removal if isinstance(removal, dict) else {}
         hat_off = bool(removal.get("hat_off"))
         coat_off = bool(removal.get("coat_off"))
@@ -482,7 +515,6 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception:
             temp = 20.0
         month = int(month or self.clock.strftime("%m", self.clock.localtime()))
-        holiday = self._today_holiday()
 
         look = {
             "hat": CHAR_HAT, "hair": CHAR_HAIR, "necklace": True,
@@ -492,8 +524,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             "no_hat_clause": "不戴帽子（头上只有完整的金色头发）",
             # 夜间睡衣的氛围补充（光线/湿度/姿态），和衣服描述分开写，避免把「露」写进提示词
             "mood": "",
-            # restyle=True 时提示词会额外要求「别照抄参考图的衣服，按这套重画」
+            # restyle=True 时提示词会额外要求「别照抄参考图的衣服，按这套重新拍」
             "restyle": False,
+            # ref_outfit=True 时整套衣服交给参考图（低温日的冬装参考图），不再叠服装提示词
+            "ref_outfit": False,
         }
         # 22:00（sleep 段）之后只要不是「事件场景」、也不在网吧包厢，就一律穿睡衣：
         # 在家、在外住店（lodging）都算，别在酒店房间里穿着白天的衣服。
@@ -541,13 +575,6 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "negative_extra": ["帽子", "外套", "校服"],
                 "restyle": True,
             })
-        elif holiday:
-            hol = HOLIDAY_OUTFITS[holiday]
-            look.update({
-                "full": hol["desc"] + "，" + hol["extra"],
-                "name": hol["name"], "caption": hol["name"],
-                "restyle": True,
-            })
         elif scene_type == "school":
             look.update({
                 "outer": JK_OUTER, "inner": JK_INNER,
@@ -567,11 +594,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "no_hat_clause": "不戴汉堡帽，头上按这套造型处理（妆容和发型也按夜店风格）",
                 "edit_note": (
                     "参考图里的汉堡造型帽子必须去掉，黄色外套和吊带背心全部换掉；"
-                    "这一张按夜店造型重画：妆容浓、眼线重，整体偏暗黑，"
+                    "这一张按夜店造型重新拍：妆容浓、眼线重，整体偏暗黑，"
                     "灯光是地下室那种激光和频闪，人脸被彩光扫到；"
                 ),
             })
-        elif scene_type in ("outdoor", "snow"):
+        elif scene_type in ("outdoor", "snow") and not winter_ref:
             winter = month in (11, 12, 1, 2, 3) and temp <= WINTER_TEMP
             if winter or scene_type == "snow":
                 look.update({
@@ -619,19 +646,62 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "caption": "",
             })
 
+        # 低温日已经换成冬装参考图：这身衣服交给参考图，不再用提示词补棉袄/围巾。
+        # 换装、事件服装、睡衣这些 restyle 的场合照旧以提示词为准，
+        # 参考图只负责脸和发色。
+        if winter_ref:
+            if look.get("restyle"):
+                look["ref_outfit"] = False
+            else:
+                look.update({
+                    "outer": "", "inner": "", "bottom": "", "extra": "", "full": "",
+                    "necklace": False,
+                    "ref_outfit": True,
+                    "name": WINTER_REF_NAME, "caption": WINTER_REF_CAPTION,
+                })
+        # 工作台条件参考图换了「全身参考图」：这套衣服以参考图为准，
+        # 换装、事件服装、睡衣、校服这些 restyle 场合仍以提示词为准。
+        try:
+            condition_ref = self._ref_condition_body_active(scene, style)
+        except Exception:
+            condition_ref = False
+        if condition_ref and not look.get("restyle"):
+            look.update({
+                "outer": "", "inner": "", "bottom": "", "extra": "", "full": "",
+                "necklace": False, "ref_outfit": True,
+                "ref_outfit_text": CONDITION_REF_OUTFIT_TEXT,
+                "name": CONDITION_REF_NAME, "caption": CONDITION_REF_CAPTION,
+            })
+        # 工作台「参考图」页给某张参考图起了衣服名字：测试面板选中它时整套衣服以那张
+        # 参考图为准（和经典档位一样不换装），帽/外套由 removal 的 hat_off / coat_off 去掉。
+        forced_outfit = str((ref_outfit or {}).get("name") or "").strip() \
+            if isinstance(ref_outfit, dict) else ""
+        if forced_outfit:
+            forced_outfit = forced_outfit[:40]
+            look.update({
+                "hat": "", "outer": "", "inner": "", "bottom": "", "extra": "", "full": "",
+                "necklace": False, "restyle": False, "ref_outfit": True,
+                "ref_outfit_text": "「" + forced_outfit + "」这一套（整套衣服以参考图为准）",
+                "name": forced_outfit, "caption": forced_outfit,
+            })
+            if hat_off:
+                look["negative_extra"].extend(["帽子", "帽檐", "发饰"])
+                look["edit_note"] += (
+                    "参考图里的帽子必须去掉：照片里不能出现任何帽子，头上只有完整的头发；"
+                )
         # 主人要求：摘掉汉堡帽子 / 脱掉外套 —— 这张自拍里不出现对应物件
         if hat_off and look["hat"]:
             look["hat"] = ""
             look["negative_extra"].append("帽子, 汉堡造型的帽子, 帽檐, 发饰")
             look["edit_note"] += (
-                "参考图里的汉堡造型帽子必须去掉：画面里不能出现任何帽子，"
+                "参考图里的汉堡造型帽子必须去掉：照片里不能出现任何帽子，"
                 "头上只有完整的金色长卷发；"
             )
-        if coat_off and look.get("outer"):
+        if coat_off and (look.get("outer") or look.get("ref_outfit")):
             look["outer"] = ""
             look["negative_extra"].append("外套, 黄色外套, 羽绒服, 棉袄, 校服外套")
             look["edit_note"] += (
-                "参考图里的外套必须去掉：画面里不能出现外套，只保留里面的衣服；"
+                "参考图里的外套必须去掉：照片里不能出现外套，只保留里面的衣服；"
             )
         return look
 
@@ -726,7 +796,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             parts.append("戴" + str(look["hat"]))
         else:
             parts.append(str(look.get("no_hat_clause") or "不戴帽子，头上只有完整的金色头发"))
-        parts.append("穿" + self._wear_text(look))
+        parts.append("穿" + (self._ref_outfit_wear(look) if look.get("ref_outfit")
+                             else self._wear_text(look)))
         if look.get("necklace"):
             parts.append("脖子上戴着细项链")
         return "，".join(parts)
@@ -736,7 +807,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return STYLE_ALIASES.get(raw, STYLE_REALISTIC)
 
     def _detect_style_request(self, text: str) -> str | None:
-        """从用户这句话里判断有没有点名画风（二次元 / 写实真人）。"""
+        """从用户这句话里判断有没有点名风格（二次元 / 写实真人）。"""
         if not text:
             return None
         if REAL_STYLE_PAT.search(text):
@@ -920,7 +991,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             return {
                 "name": cand,
                 "desc": (
-                    f"{cand}：这种服装的典型款式，上装、下装、鞋袜和配饰都要画全"
+                    f"{cand}：这种服装的典型款式，上装、下装、鞋袜和配饰都要拍全"
                     "（颜色、版型、材质、图案和配件细节清楚），是一整套完整的服装"
                 ),
             }
@@ -1152,7 +1223,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 return ""
         return name
 
-    # ---------------- 画风偏好（按 QQ 号记，默认真人版） ----------------
+    # ---------------- 风格偏好（按 QQ 号记，默认真人版） ----------------
     def _user_style(self, sender: str) -> str:
         prefs = self.state.get("style_prefs")
         if isinstance(prefs, dict):
@@ -1395,11 +1466,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
     @staticmethod
     def _clean_closeup_cue(text) -> str:
-        """把 txt 里抽到的那条要求里「背景 / 画风 / 画幅比例」这类小句剔掉。
+        """把 txt 里抽到的那条要求里「背景 / 风格 / 画幅比例」这类小句剔掉。
 
         例：「服装不变，背景环境为傍晚的室内少女卧室，人物慵懒地靠在椅子上」
         ->  「服装不变，人物慵懒地靠在椅子上」
-        背景统一由 _get_scene() 的真实场景来写，画风/画幅由配置决定。
+        背景统一由 _get_scene() 的真实场景来写，风格/画幅由配置决定。
         """
         raw = str(text or "").strip()
         if not raw:
@@ -1413,7 +1484,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 continue
             out.append(seg + sep)
         cleaned = "".join(out)
-        # 画风词就地删（保留同小句里的动作/构图），例如「手绘风格」「采用动漫处理厚涂风插画特写方式」
+        # 风格词就地删（保留同小句里的动作/构图），例如「手绘风格」「采用动漫处理厚涂风插画特写方式」
         cleaned = CLOSEUP_CUE_STYLE_PAT.sub("", cleaned)
         # 顺手修错字
         for bad, good in CLOSEUP_CUE_FIXUPS:
@@ -1428,7 +1499,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         cleaned = re.sub(r"[，。；、,;]{2,}", "，", cleaned)
         return cleaned.strip(" ，。；、,;")
 
-    # ---------------- 互动：摸摸 / 捏捏 的提示词 ----------------
+    # ---------------- 互动：摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍 的提示词 ----------------
     def _interact_prompt_path(self) -> str:
         """配置路径优先，其次数据目录，最后插件目录（兼容旧中文文件名）。"""
         root = self._material_dir()
@@ -1446,8 +1517,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return ""
 
     def _interact_prompts(self) -> list:
-        """读互动提示词（每行一条；行首编号自动去掉，可带「摸摸：」「捏捏：」标签）。
+        """读互动提示词，返回 [{"action", "text", "id"}]。
 
+        每行一条，行首编号自动去掉；行首「动作词：」决定这条归哪个触发词
+        （摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍……），后面的正文才是生图提示词。
         文件改了会自动重读（按 mtime 判断），和特写提示词一个套路。
         """
         path = self._interact_prompt_path()
@@ -1458,24 +1531,19 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             cache = getattr(self, "_interact_cache", None)
             if cache and cache[0] == path and cache[1] == mtime:
                 return [dict(x) for x in cache[2]]
-            out = []
             with open(path, encoding="utf-8-sig") as f:
-                for raw in f:
-                    ln = raw.strip()
-                    if not ln or ln.startswith("#"):
-                        continue
-                    ln = re.sub(r"^\s*\d+\s*[：:.、)）]\s*", "", ln)
-                    action = ""
-                    for lab in INTERACT_ACTIONS:
-                        for sep in ("：", ":", "｜", "|", " "):
-                            if ln.startswith(lab + sep):
-                                action = lab
-                                ln = ln[len(lab) + len(sep):].strip()
-                                break
-                        if action:
-                            break
-                    if ln:
-                        out.append({"action": action, "text": ln})
+                raw_text = f.read()
+            out = []
+            for entry in parse_materials("interaction", raw_text):
+                action = str(entry.get("action") or "").strip()
+                text = str(entry.get("text") or "").strip()
+                if action and text.startswith(action):
+                    text = re.sub(r"^" + re.escape(action) + r"\s*[：:｜|]\s*",
+                                  "", text).strip()
+                if not text:
+                    continue
+                out.append({"action": action, "text": text,
+                            "id": int(entry.get("id") or 0)})
             if out:
                 self._interact_cache = (path, mtime, out)
                 logger.info(f"[selfie] 互动提示词已加载 {len(out)} 条：{path}")
@@ -1485,12 +1553,26 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             logger.warning(f"[selfie] 读取互动提示词失败: {e!r}")
         return []
 
+    def _interact_triggers(self) -> tuple:
+        """可触发的互动词：内置表 + 互动库行首的动作词（库加新词就自动生效）。"""
+        words = list(INTERACT_TRIGGERS)
+        for entry in self._interact_prompts():
+            action = str(entry.get("action") or "").strip()
+            if action and action not in words:
+                words.append(action)
+        return tuple(words)
+
+    def _interact_has_prompt(self, action: str) -> bool:
+        """互动库里有没有以这个动作词开头的条目。"""
+        return any(entry.get("action") == action for entry in self._interact_prompts())
+
     def _pick_interact_prompt(self, action: str,
                               forced_id: int | None = None) -> dict:
-        """抽一条互动提示词（不会连着两次抽到同一条）。
+        """按触发词在互动库里 roll 一条提示词（不会连着两次抽到同一条）。
 
-        优先抽带本动作标签的那几条；一条都没有就整个文件里抽。
-        forced_id（管理员「admin摸摸2」）按文件行号从 1 开始取。
+        - 库里没有以这个动作词开头的条目：返回 error="no_prompt"，由调用方回害羞的话
+        - 有两条以上：在它们之间随机 roll 一条
+        - forced_id（管理员「admin摸摸2」）：直接取素材编号为 2 的那一条
         """
         pool = self._interact_prompts()
         if not pool:
@@ -1500,21 +1582,23 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 want = int(forced_id)
             except Exception:
                 want = 0
-            if not (1 <= want <= len(pool)):
+            pick = next((e for e in pool if int(e.get("id") or 0) == want), None)
+            if want < 1 or pick is None:
                 return {"error": "out_of_range", "id": want, "total": len(pool), "text": ""}
-            pick = pool[want - 1]
             idx = want
         else:
-            tagged = [(i, e) for i, e in enumerate(pool, 1) if e.get("action") == action]
-            cand = tagged or [(i, e) for i, e in enumerate(pool, 1)]
+            cand = [e for e in pool if e.get("action") == action]
+            if not cand:
+                return {"error": "no_prompt", "id": 0, "total": len(pool), "text": ""}
             last = str(self.state.get("interact_last") or "")
-            fresh = [c for c in cand if c[1].get("text") != last]
-            idx, pick = self.rng.choice(fresh or cand)
+            fresh = [e for e in cand if e.get("text") != last]
+            pick = self.rng.choice(fresh or cand)
+            idx = int(pick.get("id") or 0)
         self.state["interact_last"] = pick.get("text") or ""
         self.state["interact_last_action"] = action
         self._save_state()
         logger.info(
-            f"[selfie] 互动提示词（{action}）抽到第 {idx}/{len(pool)} 条："
+            f"[selfie] 互动提示词（{action}）抽到编号 {idx}/{len(pool)}："
             f"{str(pick.get('text'))[:40]}"
         )
         return {
@@ -1523,11 +1607,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         }
 
     async def _interact_ack(self, event, action: str) -> str:
-        """接单话：因地制宜地答应让她摸摸 / 捏捏。
+        """接单话：因地制宜地答应让她摸摸 / 戳戳。
 
         拟人模式：像聊天一样回应，第一句末尾（咔嚓）；关掉则旧短句 + 🤳。
         """
-        pool = INTERACT_ACK_FALLBACK.get(action) or ["好呀，我这就来"]
+        pool = INTERACT_ACK_FALLBACK.get(action) or [
+            f"好呀，我这就让你{action}", "来嘛，轻一点哦", f"嘻嘻，{action}一下就好",
+        ]
         if self._natural_chat_enabled():
             return await self._natural_ack(
                 event,
@@ -1572,8 +1658,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return text.rstrip("。！!～~ ") + "🤳"
 
     async def _interact_cue_error(self, event, cue: dict) -> bool:
-        """互动提示词抽不到时的回话（文件缺失 / 管理员编号越界）。"""
-        if cue.get("error") == "out_of_range":
+        """互动提示词抽不到时的回话（库里没这个词 / 文件缺失 / 管理员编号越界）。"""
+        if cue.get("error") == "no_prompt":
+            # 触发词在库里没有对应提示词：害羞不接单，不出图
+            await event.send(MessageChain([Plain(self.rng.choice(INTERACT_SHY_FALLBACK))]))
+        elif cue.get("error") == "out_of_range":
             await event.send(MessageChain([Plain(
                 f"编号 {cue['id']} 没有哦，现在一共 {cue['total']} 条，换一个编号？"
             )]))
@@ -1864,8 +1953,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             ("非本人", "是本人"),
             ("不是同一个人", "就是本人"),
             ("无本人出镜", "有本人出镜"),
-            ("本人未出镜", "本人在画面里"),
-            ("本人不在画面中", "本人在画面中"),
+            ("本人未出镜", "本人在照片里"),
+            ("本人不在照片中", "本人在照片中"),
             ("没有本人", "有本人"),
             ("不是我", "是我"),
             ("不像我", "就是本人"),
@@ -1891,7 +1980,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return "自拍"
 
     def _schedule_self_note(self, entry: dict | None) -> None:
-        """后台补一张照片的「画面自述」（同一张只会补一次）。"""
+        """后台补一张照片的「照片描述」（同一张只会补一次）。"""
         if not isinstance(entry, dict) or entry.get("visual"):
             return
         if not str(entry.get("path") or ""):
@@ -1961,10 +2050,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if not missing:
                 return
             todo = missing[-max_items:]
-            logger.info(f"[selfie] 开始补 {len(todo)} 张旧照片的画面自述（后台）")
+            logger.info(f"[selfie] 开始给 {len(todo)} 张旧照片补描述（后台）")
             for e in todo:
                 await self._fill_visual(e)
-            logger.info("[selfie] 旧照片画面自述补完")
+            logger.info("[selfie] 旧照片描述补完")
         except Exception as e:
             logger.warning(f"[selfie] 启动补自述失败: {e!r}")
 
@@ -1981,7 +2070,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         )
         visual = self._normalize_visual(e.get("visual") or "")
         if visual:
-            line += f"。画面里：{visual}"
+            line += f"。照片里：{visual}"
         else:
             line += f"，背景是{(e.get('desc') or '')[:40]}"
         cap = str(e.get("caption") or "").strip()
@@ -2050,24 +2139,24 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 ref_desc = f"参考图是{ref_self}。"
             head = (
                 f"{ref_desc}"
-                f"{role}，画一张手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
-                "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）："
+                f"{role}，拍一张手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
+                "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）："
                 f"{style_block}"
                 f"{base_line.format(no_hat=no_hat)}"
                 f"{cos_line}"
-                "镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
-                "手掌在画面外，画面里只有这条手臂；"
-                f"另一只手{gesture}；脸在画面上方占三分之一，{expression}，眼睛直视镜头。"
-                f"{same_person}，衣服严格按上面这段描述来画。"
+                "镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
+                "手掌在镜头外，照片里只有这条手臂；"
+                f"另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
+                f"{same_person}，衣服严格按上面这段描述来拍。"
             )
         else:
             head = (
                 "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
-                "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）："
+                "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）："
                 f"{style_block}"
-                "镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
-                "手掌在画面外，画面里只有这条手臂；"
-                f"另一只手{gesture}；脸在画面上方占三分之一，{expression}，眼睛直视镜头。"
+                "镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
+                "手掌在镜头外，照片里只有这条手臂；"
+                f"另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
                 f"人物：金发成年女性，金色长卷发，棕色大眼睛，{no_hat}；穿{costume_desc}。"
             )
         return (
@@ -2300,7 +2389,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception as e:
             logger.error(f"[selfie] cosplay 生成失败: {e!r}")
             try:
-                await event.send(MessageChain([Plain("这次没换好……等我缓缓再试")]))
+                tip = self._generation_failure_text(e, generic="这次没换好……等我缓缓再试")
+                await event.send(MessageChain([Plain(tip)]))
             except Exception:
                 pass
         finally:
@@ -2312,12 +2402,39 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     async def _generate_closeup(self, scene: dict, model: str, style: str,
                                 look: dict, cue: dict | None,
                                 cos_name: str = "", char_path: str = "",
-                                kind: str = "") -> bytes:
-        """生成特写：普通特写单图；特写 cos 先试双图，失败退回「先描述服装」再单图。"""
+                                kind: str = "", refs: tuple | None = None) -> bytes:
+        """生成特写：普通特写单图；特写 cos 先试双图，失败退回「先描述服装」再单图。
+
+        refs 由生图测试显式传（冬装经典档 / 素颜勾选）；None 时按当天规则自动挑。
+        """
         cue_text = self._clean_closeup_cue((cue or {}).get("text"))
+        # cos 特写已经有「角色图」占参考位，不掺素颜/冬装参考图，免得超过站点张数上限
+        cos = bool(cos_name)
+        head_only = False
+        gen_refs = {}
+        if cos:
+            ref, face_ref, single_ref = None, None, None
+            prompt_refs = None
+        else:
+            explicit_refs = refs is not None
+            if explicit_refs:
+                ref, face_ref, single_ref = refs
+                head_only = self._restyle_head_only(scene, style, look)
+                gen_refs = {"ref": ref, "face_ref": face_ref, "single_ref": single_ref,
+                            "head_only": head_only}
+            else:
+                gen_refs = self._generation_refs(scene, style, look)
+                ref, face_ref, single_ref = (gen_refs.get("ref"), gen_refs.get("face_ref"),
+                                             gen_refs.get("single_ref"))
+                head_only = bool(gen_refs.get("head_only"))
+            # 没有覆盖时把 refs 传 None，让提示词按原来的「自动挑参考图」走；
+            # 显式传了覆盖（哪怕只有素颜脸）才锁成 use_ref。
+            prompt_refs = ((ref, face_ref, single_ref)
+                           if explicit_refs or ref or face_ref or single_ref else None)
         prompt = self._closeup_prompt(
             scene, model, style, look, cue,
             cos_name=cos_name, with_char_image=bool(char_path), kind=kind,
+            refs=prompt_refs,
         )
         # 最后一道：让 LLM 把动作落进当前场景（服装/动作/机位不动，防悬浮和背景畸形）
         prompt = await self._scene_adapt_prompt(prompt, scene, look, cue_text)
@@ -2346,14 +2463,28 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     cos_name=cos_name, with_char_image=False, kind=kind,
                 )
                 prompt2 = await self._scene_adapt_prompt(prompt2, scene, look2, cue_text)
-                return await self._generate(prompt2, model, style, neg)
-        return await self._generate(prompt, model, style, neg)
+                return await self._generate(prompt2, model, style, neg, **gen_refs)
+        return await self._generate(prompt, model, style, neg, **gen_refs)
 
     async def _generate_selfie_shot(self, scene: dict, model: str, style: str,
-                                    look: dict, action: dict) -> bytes:
+                                    look: dict, action: dict,
+                                    refs: tuple | None = None) -> bytes:
         """生图测试「自拍」来源：用选中的表情 / 手势拍一张前置摄像头自拍。"""
-        prompt = self._selfie_prompt(scene, model, style, look, selfie_action=action)
-        return await self._generate(prompt, model, style, look.get("negative_extra"))
+        explicit_refs = refs is not None
+        if explicit_refs:
+            ref, face_ref, single_ref = refs
+            gen_refs = {"ref": ref, "face_ref": face_ref, "single_ref": single_ref,
+                        "head_only": self._restyle_head_only(scene, style, look)}
+        else:
+            gen_refs = self._generation_refs(scene, style, look)
+            ref, face_ref, single_ref = (gen_refs.get("ref"), gen_refs.get("face_ref"),
+                                         gen_refs.get("single_ref"))
+        prompt_refs = ((ref, face_ref, single_ref)
+                       if explicit_refs or ref or face_ref or single_ref else None)
+        prompt = self._selfie_prompt(scene, model, style, look, selfie_action=action,
+                                     refs=prompt_refs)
+        return await self._generate(prompt, model, style, look.get("negative_extra"),
+                                    **gen_refs)
 
     async def _do_closeup(self, event: AstrMessageEvent, is_admin: bool,
                           sender: str = "", style_override: str | None = None,
@@ -2365,8 +2496,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                           kind: str = "") -> None:
         """拍一张特写。cand 有值就是「特写 cosplay」，否则按当时的衣服拍。
 
-        kind 有值（摸摸 / 捏捏）= 互动特写：构图话术换成「画外伸一只手进来」的版本，
-        记忆里也标成互动，别的流程（场景/衣服/额度/配额）完全共用。
+        kind 有值（摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍…）= 互动特写：构图话术换成
+        「镜头外伸一只手进来」的版本，记忆里也标成互动，别的流程（场景/衣服/额度/配额）完全共用。
         """
         cos_name = ""
         try:
@@ -2381,6 +2512,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             scene = self._event_photo_scene(await self._get_scene())[0]
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
             style = self._style(style_override)
+            await self._ensure_ref_day(scene)
             cos_name = str((cand or {}).get("name") or "")
             char_path = str((cand or {}).get("path") or "")
             if cos_name:
@@ -2390,9 +2522,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 )
                 look = self._cosplay_look(cos_name, costume_desc)
             else:
-                look = self._resolve_look(scene, removal, None, costume, force_costume)
+                look = self._resolve_look(scene, removal, None, costume, force_costume,
+                                          style=style)
             kind_name = str(kind or "").strip()
-            # 互动那两条要求「画外有只手入镜」，生成期间临时剔掉会掐掉那只手的负面词
+            # 互动提示词本来就要「镜头外有只手入镜」，生成期间临时剔掉会掐掉那只手的负面词
             self._neg_filter = INTERACT_NEG_DROP if kind_name else None
             try:
                 img = await self._generate_closeup(
@@ -2434,7 +2567,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception as e:
             logger.error(f"[selfie] 特写生成失败: {e!r}")
             try:
-                tip = (BALANCE_FAIL_TEXT if self._is_quota_error(e) else CLOSEUP_FAIL_TEXT)
+                tip = self._generation_failure_text(e, generic=CLOSEUP_FAIL_TEXT)
                 await event.send(MessageChain([Plain(tip)]))
             except Exception:
                 pass
@@ -2673,7 +2806,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         )
         visual = self._normalize_visual(e.get("visual") or "")
         if visual:
-            line += f"。画面里：{clip(visual, 120)}"
+            line += f"。照片里：{clip(visual, 120)}"
         else:
             line += f"，背景是{clip(e.get('desc'), 60)}"
         caption = clip(e.get("caption"), 80)
@@ -2692,8 +2825,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             "标了「内部更新」的只当自己知道，不用复述。）\n"
         )
         closing = (
-            "\n注意：照片里的人是你本人；画面细节以「画面里：」描述为准。"
-            "没有画面描述时只按场景穿着回答，不编造人物或细节。"
+            "\n注意：照片里的人是你本人；照片细节以「照片里：」描述为准。"
+            "没有照片描述时只按场景穿着回答，不编造人物或细节。"
             "\n</selfie_memory>"
         )
         kept = []
@@ -2742,7 +2875,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 return (
                     "对方这次发来的图片是你以前发过的这张照片（可能在别的会话发过）：\n"
                     + self._format_injected_memory_entry(hit)
-                    + "。照片里的人是你本人；回答以画面描述为准。"
+                    + "。照片里的人是你本人；回答以照片描述为准。"
                 )
             if self._is_ref_self(hashes):
                 return f"对方这次发来的图片里，人物与当前角色（{self._profile().name}）参考图匹配。"
@@ -2916,7 +3049,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
     @filter.on_llm_request()
     async def inject_selfie_memory(self, event: AstrMessageEvent, req) -> None:
-        """每次 LLM 请求前，把「自己发过哪些照片、画面里有什么」塞进本轮上下文。"""
+        """每次 LLM 请求前，把「自己发过哪些照片、照片里有什么」塞进本轮上下文。"""
         self._remember_livingmemory_target(event)
         try:
             note = await self._selfie_memory_note(event)
@@ -2937,7 +3070,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if not getattr(self, "_selfie_memory_logged", False):
                 self._selfie_memory_logged = True
                 logger.info(
-                    f"[selfie] 照片记忆已注入（{len(note)} 字，含画面自述），"
+                    f"[selfie] 照片记忆已注入（{len(note)} 字，含照片描述），"
                     "之后每次对话都会带上"
                 )
             else:
@@ -2945,9 +3078,15 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception as e:
             logger.warning(f"[selfie] 注入照片记忆失败: {e!r}")
 
-    def _use_reference(self, model: str | None = None, style: str | None = None) -> bool:
-        """这次生成会不会带参考图（OpenAI 兼容接口用 /images/edits 贴参考图）。"""
-        return bool(self._pick_ref(style))
+    def _use_reference(self, model: str | None = None, style: str | None = None,
+                       scene: dict | None = None) -> bool:
+        """这次生成会不会带参考图（OpenAI 兼容接口用 /images/edits 贴参考图）。
+
+        scene 有值时把「这张会不会换素颜/冬装参考图」也算进去：换的那张图存在，
+        就算原来的自动参考图缺了也照样走 edits 接口。
+        """
+        ref, face, single_ref = self._photo_refs(scene, style)
+        return bool(ref or face or single_ref or self._pick_ref(style))
 
     def _event_photo_scene(self, scene: dict):
         """给事件里的每一张照片加随机变化：场景池抽一条、动作池抽一条。
@@ -3021,7 +3160,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         自定义角色走同一个判断，只把 ``custom_text`` 追加到它自己的提示词后面。
         """
         scene = scene if isinstance(scene, dict) else {}
-        # 事件进行中时事件动作优先：正在厂里拧螺丝，就不该按「睡觉」或「吃饭」画。
+        # 事件进行中时事件动作优先：正在厂里拧螺丝，就不该按「睡觉」或「吃饭」拍。
         event_action = str(scene.get("event_action") or "").strip()
         if event_action:
             return {
@@ -3029,7 +3168,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "intro": "一张 9:16 竖屏照片，记录她此刻正在做的事：",
                 "framing": "",
                 "pose": ("这一张的动作、机位和景别完全按下面这段来，"
-                         f"不要再画成伸手自拍：{event_action}；"),
+                         f"不要再拍成伸手自拍：{event_action}；"),
                 "face_line": "",
                 "light_line": "",
                 "tail": "",
@@ -3044,19 +3183,19 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "intro": SELFIE_SHOT_INTRO,
                 "framing": meal["framing"],
                 "pose": meal["pose"],
-                "face_line": f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。",
+                "face_line": f"脸在照片上方占三分之一，{expression}，眼睛直视镜头。",
                 "light_line": "",
                 "tail": meal["tail"],
-                "custom_text": "这一张的动作与画面要求：" + meal_text(meal),
+                "custom_text": "这一张的动作与照片要求：" + meal_text(meal),
             }
         return {
             "source": "default",
             "intro": SELFIE_SHOT_INTRO,
-            "framing": "近距离自拍特写（只拍到腰部以上，脸和上半身占满画面）：",
-            "pose": ("镜头就在画面前方，她朝镜头伸出一只手臂，前臂从画面右下角斜着伸向镜头、"
-                     "手掌在画面外，画面里只有这条手臂；"
+            "framing": "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）：",
+            "pose": ("镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
+                     "手掌在镜头外，照片里只有这条手臂；"
                      f"另一只手{gesture}；"),
-            "face_line": f"脸在画面上方占三分之一，{expression}，眼睛直视镜头。",
+            "face_line": f"脸在照片上方占三分之一，{expression}，眼睛直视镜头。",
             "light_line": "",
             "tail": "",
             "custom_text": "",
@@ -3066,7 +3205,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """这一张的时段/光线约束。
 
         生图模型默认把窗户补成白天，光靠场景描述压不住，所以按场景锁定的
-        钟点单独写一条：夜里必须画夜色、只开暖色灯，窗外不能是白天。
+        钟点单独写一条：夜里必须拍出夜色、只开暖色灯，窗外不能是白天。
         """
         try:
             return lighting_text(scene if isinstance(scene, dict) else None)
@@ -3076,19 +3215,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     def _selfie_prompt(self, scene: dict, model: str | None = None,
                        style: str | None = None,
                        look: dict | None = None,
-                       selfie_action: dict | None = None) -> str:
-        """按「模型类型 + 画风 + 这套衣服」生成提示词。
+                       selfie_action: dict | None = None,
+                       refs: tuple | None = None) -> str:
+        """按「模型类型 + 风格 + 这套衣服」生成提示词。
 
         - 带参考图：以参考图中的同一角色为准（脸/发型），衣服按这次解析出来的 look
         - 不带参考图：纯文字人设
-        - 画风只有两种：纯二次元动漫 / 写实真人照片；用户当场点名的画风优先
+        - 风格只有两种：纯二次元动漫 / 写实真人照片；用户当场点名的风格优先
         - 主人要求摘帽子/脱外套时，用 edit_note 明确让模型把参考图里的物件去掉
         - 动作只由 ``_photo_action`` 决定：睡觉 / 吃饭 / 事件动作都会顶替默认自拍姿势
         - ``selfie_action`` 由生图测试显式指定（名字/表情/手势），日常自拍传 None 随机抽
         """
         profile = self._profile()
         scene = scene if isinstance(scene, dict) else {}
-        # 吃饭 / 做饭这一张：把菜品库里的描述补进场景，供动作和画面要求引用。
+        # 吃饭 / 做饭这一张：把菜品库里的描述补进场景，供动作和照片要求引用。
         if str(scene.get("living_phase") or "") in ("cook", "lunch", "lunch_out"):
             dish = str(scene.get("meal") or "").strip()
             info = self._meal_library().get(dish) if dish else None
@@ -3096,7 +3236,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 scene = dict(scene)
                 scene["meal_desc"] = str(info["description"])
         if look is None:
-            look = self._resolve_look(scene)
+            look = self._resolve_look(scene, style=style)
         night_kind = self._night_scene_kind(scene)  # "" / "bed" / "bunk" / "cyber"
         sleepy = str(scene.get("type") or "") == "bed_sleepy"
         # 日常自拍的表情和手势从自拍动作库随机抽一整条（15 条内置，可在「添加素材」里扩充）
@@ -3115,18 +3255,32 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if light:
                 prompt += "\n" + light
             return prompt
-        use_ref = self._use_reference(model, style)
+        use_ref = self._use_reference(model, style, scene)
         style = self._style(style)
         style_block = STYLE_BLOCK[style]
+        if refs is None:
+            ref_override, face_override, _single_ref = self._photo_refs(scene, style, look)
+        else:
+            # 生图测试显式指定参考图（冬装档 / 素颜勾选）：提示词和实际贴图保持一致
+            ref_override, face_override, _single_ref = refs
+            use_ref = bool(ref_override or face_override or _single_ref)
         wear = self._wear_text(look)
+        if look.get("ref_outfit"):
+            # 冬装参考图：衣服以参考图为准，不再用提示词里的黄色外套/短热裤那套
+            wear = self._ref_outfit_wear(look)
         hat = str(look.get("hat") or "")
         hair = str(look.get("hair") or CHAR_HAIR)
         necklace = "，脖子上戴着细项链" if look.get("necklace") else ""
         edit_note = str(look.get("edit_note") or "")
         no_hat = str(look.get("no_hat_clause") or "不戴帽子（头上只有完整的金色头发）")
+        # 睡觉房间换了素颜脸部参考图：顺带锁一下妆容，别又给补成浓妆
+        bare_face_note = ""
+        if use_ref and face_override and face_override == self._ref_sleep_face_image():
+            bare_face_note = ("参考图里的脸是她卸妆后的素颜（没有眼影和口红），"
+                              "这张照片里也不要有浓妆，只保留自然的皮肤质感；")
         restyle_note = ""
         if use_ref and look.get("restyle"):
-            restyle_note = "参考图里的衣服不要照抄，人物的衣服必须按下面这段重新画："
+            restyle_note = "参考图里的衣服不要照抄，人物的衣服必须按下面这段重新拍："
         framing = action["framing"]
         pose = action["pose"]
         face_line = action["face_line"]
@@ -3159,9 +3313,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 f"{head_clause}"
                 f"{restyle_note}"
                 f"穿{wear}{necklace}；"
-                f"{edit_note}"
+                f"{edit_note}{bare_face_note}"
                 f"{pose}{face_line}"
-                f"{same_person}，衣服严格按上面这段描述来画。"
+                f"{same_person}，衣服严格按上面这段描述来拍。"
             )
         else:
             head = (
@@ -3224,16 +3378,17 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                         cue: dict | None = None,
                         cos_name: str = "",
                         with_char_image: bool = True,
-                        kind: str = "") -> str:
+                        kind: str = "",
+                        refs: tuple | None = None) -> str:
         """特写提示词。
 
         和自拍共用「人设 / 这一身衣服 / 现在的场景 / 天气和时刻」，区别只在构图：
-        把「手机前置摄像头自拍」换成「镜头贴近的特写（画外有人拿相机在拍，画面里没有手机）」，
+        把「手机前置摄像头自拍」换成「镜头贴近的特写（镜头外有人拿相机在拍，照片里没有手机）」，
         再加上这次从 txt 里随机抽到的那条要求（cue）。
         """
         profile = self._profile()
         if profile.is_custom:
-            prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene),
+            prompt = build_custom_prompt(profile, scene, look or self._resolve_look(scene, style=style),
                                          style=self._style(style), kind="closeup",
                                          cue=self._clean_closeup_cue(str((cue or {}).get("text") or "")),
                                          interaction=bool(kind), costume_reference=bool(cos_name and with_char_image))
@@ -3241,16 +3396,22 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if light:
                 prompt += "\n" + light
             return prompt
-        use_ref = self._use_reference(model, style)
+        if look is None:
+            look = self._resolve_look(scene, style=style)
+        use_ref = self._use_reference(model, style, scene)
         style = self._style(style)
         style_block = STYLE_BLOCK[style]
-        if look is None:
-            look = self._resolve_look(scene)
+        if refs is None:
+            ref_override, face_override, _single_ref = self._photo_refs(scene, style, look)
+        else:
+            # 生图测试显式指定参考图（冬装档 / 素颜勾选）：提示词和实际贴图保持一致
+            ref_override, face_override, _single_ref = refs
+            use_ref = bool(ref_override or face_override or _single_ref)
         cue_text = self._clean_closeup_cue((cue or {}).get("text"))
         if not cue_text:
-            cue_text = "镜头贴近拍一张特写，只拍上半身或局部，人物占满画面"
+            cue_text = "镜头贴近拍一张特写，只拍上半身或局部，人物占满整张照片"
         if cue_text != str((cue or {}).get("text") or "").strip():
-            logger.info(f"[selfie] 特写要求已剔除背景/画风/比例：{cue_text[:50]}")
+            logger.info(f"[selfie] 特写要求已剔除背景/风格/比例：{cue_text[:50]}")
         # 人体结构硬性要求：出脚就锁 5 个脚趾，出手就锁 5 根手指
         structure = []
         if CLOSEUP_TOE_PAT.search(cue_text):
@@ -3273,32 +3434,37 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         else:
             angle_line = ""
         wear = self._wear_text(look)
+        if look.get("ref_outfit"):
+            # 冬装参考图：衣服以参考图为准，不再叠黄色外套/短热裤那套提示词
+            wear = self._ref_outfit_wear(look)
         hat = str(look.get("hat") or "")
         hair = str(look.get("hair") or CHAR_HAIR)
         necklace = "，脖子上戴着细项链" if look.get("necklace") else ""
         edit_note = str(look.get("edit_note") or "")
         no_hat = str(look.get("no_hat_clause") or "不戴帽子（头上只有完整的金色头发）")
+        bare_face_note = ""
+        if use_ref and face_override and face_override == self._ref_sleep_face_image():
+            bare_face_note = ("参考图里的脸是她卸妆后的素颜（没有眼影和口红），"
+                              "这张照片里也不要有浓妆，只保留自然的皮肤质感。")
         restyle_note = ""
         if use_ref and look.get("restyle"):
-            restyle_note = "参考图里的衣服不要照抄，人物的衣服必须按下面这段重新画："
-        if kind in INTERACT_ACTIONS:
-            # 互动特写：这两条提示词的关键就是「画外伸进来一只手」，不能沿用「不出现手臂」那句
-            verb = {
-                "摸摸": "轻轻摸着她的脸颊和下巴",
-                "捏捏": "用两根手指轻轻捏着她的脸颊",
-            }[kind]
+            restyle_note = "参考图里的衣服不要照抄，人物的衣服必须按下面这段重新拍："
+        if kind:
+            # 互动特写：这类提示词的关键就是「镜头外伸进来一只手」，不能沿用「不出现手臂」那句
+            verb = INTERACT_VERB.get(kind) or f"轻轻{kind}着她"
             shot = (
                 f"这是一张「互动特写」照片：对方正在{verb}。镜头贴近人物、构图大胆裁切，"
                 "只突出局部或半身，竖幅构图。"
-                "画面里必须有一只手从画外伸进来（那是对方的手，正在碰她的脸），"
+                "照片里必须有一只手从镜头外伸进来（那是对方的手，正在碰她），"
                 "只出现这一只手、五指根数正常、不出现第二个人影；"
-                "画面里不出现手机、不出现自拍杆，当成画外有人近距离举着相机在拍她。"
+                "照片里不出现手机、不出现自拍杆，当成镜头外有人近距离举着相机在拍她。"
+                + INTERACT_STILL_LINE
             )
         else:
             shot = (
                 "这是一张「特写」照片：镜头贴近人物、构图大胆裁切，只突出局部或半身；"
-                "不是自拍——画面里不出现手机、不出现自拍杆、也不出现伸向镜头的手臂，"
-                "当成画外有个人拿相机近距离在拍她。竖幅构图。"
+                "不是自拍——照片里不出现手机、不出现自拍杆、也不出现伸向镜头的手臂，"
+                "当成镜头外有个人拿相机近距离在拍她。竖幅构图。"
             )
         hour = local_datetime(self.clock.time()).hour
         # 跟场景自己的时段走（场景可能是锁定下来的一张），别用当前时钟和场景打架
@@ -3349,8 +3515,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
             head = (
                 f"{intro}。{shot}{style_block}"
-                f"{head_clause}{restyle_note}穿{wear}{necklace}；{edit_note}"
-                f"{same_person}，衣服严格按上面这段描述来画。"
+                f"{head_clause}{restyle_note}穿{wear}{necklace}；{edit_note}{bare_face_note}"
+                f"{same_person}，衣服严格按上面这段描述来拍。"
             )
         else:
             head = f"{shot}{style_block}人物：{self._character(look)}。"
@@ -3366,8 +3532,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + CLOSEUP_ANATOMY_LINE
             + f"场景与氛围（以这段为准）：她现在在{scene.get('desc', '')}；{atmosphere}。"
             + self._time_light_line(scene)
-            + "背景就画她此刻所在的这个真实环境，要有清晰的环境细节；"
-            + "不要换成其它地方，也不要画成纯色背景、棚拍背景或看不出环境的背景。"
+            + "背景就拍她此刻所在的这个真实环境，要有清晰的环境细节；"
+            + "不要换成其它地方，也不要拍成纯色背景、棚拍背景或看不出环境的背景。"
             + STYLE_QUALITY[style]
             + self._scene_hard_note(scene)
         )
@@ -3378,7 +3544,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
 
     def _ref_candidates(self, style: str) -> tuple[str, ...]:
-        """按画风给出参考图候选；对应画风那套素材缺失时退回另一套。"""
+        """按风格给出参考图候选；对应风格那套素材缺失时退回另一套。"""
         anime = (self.ref_9x16_path, self.ref_front_path, self.ref_path)
         real = (self.ref_real_9x16_path, self.ref_real_front_path, self.ref_real_path)
         if style == STYLE_REALISTIC:
@@ -3386,7 +3552,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return anime + real
 
     def _pick_ref(self, style: str | None = None, single: bool = False) -> str:
-        """按画风挑参考图。
+        """按风格挑参考图。
 
         single=True 表示这次只能贴 1 张（备用站限制）：真人版优先用「身体+脸」合并图，
         比原来的三视图正面像得多。
@@ -3430,8 +3596,464 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         path = self.ref_real_face_path
         return path if path and os.path.exists(path) else ""
 
+    def _head_only_refs(self, scene: dict | None = None,
+                        style: str | None = None) -> tuple | None:
+        """换装时的头部参考图：只给脸和头发，不给穿参考图衣服的全身照。
 
+        - 睡觉房间的素颜生效时：用素颜三视图（本身就是多角度素颜脸，一张就够）；
+        - 自定义角色：用配置的头部参考图（没配就退回原来的自动参考图）；
+        - 内置真人角色：正脸 `ref_real_face` + 侧头 `ref_real_head_side`。
+        返回 (主参考图, 附加参考图, None)；None 表示这张不启用头部参考图。
+        """
+        if self._style(style) != STYLE_REALISTIC:
+            return None
+        if self._ref_swap_enabled() and self._bare_face_ref_active(scene, style):
+            face = self._ref_sleep_face_image()
+            return (face, None, None) if face else None
+        profile = self._profile()
+        if profile.is_custom:
+            head = profile.pick_head_reference(self.plugin_dir)
+            return (head, None, None) if head else None
+        face = self.ref_real_face_path
+        side = self.ref_real_head_side_path
+        if not (face and os.path.isfile(face)):
+            return None
+        return (face, side if os.path.isfile(side) else None, None)
 
+    def _restyle_head_only(self, scene: dict | None, style: str | None,
+                           look: dict | None) -> bool:
+        """这次是不是「换装」：衣服以提示词为准，参考图只贴头部。"""
+        return bool(isinstance(look, dict) and look.get("restyle")
+                    and self._head_only_refs(scene, style))
+
+    # ------------------------------------------------------------------
+    # 参考图替换：夜里睡觉房间的素颜脸 / 低温日全天的冬装
+    # ------------------------------------------------------------------
+    def _ref_swap_enabled(self) -> bool:
+        """「素颜/冬装参考图」总开关；两张图一张都找不到时按关闭处理。"""
+        try:
+            if not bool(self._cfg("ref_swap_enabled", False)):
+                return False
+            return bool(self._ref_sleep_face_image() or self._ref_winter_image())
+        except Exception:
+            return False
+
+    def _ref_swap_threshold(self) -> float:
+        try:
+            return float(self._cfg("ref_swap_temp", 10))
+        except (TypeError, ValueError):
+            return 10.0
+
+    def _ref_image_path(self, key: str, bundled: str) -> str:
+        """配置里的参考图路径；没配时内置角色用插件自带图，自定义角色不借用。
+
+        自定义角色配了路径就用配置的图；路径写错只告警并关掉这一条，
+        绝不回退成内置角色的素颜/冬装图（那会拍成另一个人）。
+        """
+        custom = str(self._cfg(key, "") or "").strip()
+        if custom:
+            path = custom if os.path.isabs(custom) else os.path.join(self.plugin_dir, custom)
+            if os.path.isfile(path):
+                return path
+            logger.warning(f"[selfie] {key} 指向的参考图不存在: {path}")
+            return ""
+        if self._profile().is_custom:
+            return ""
+        return bundled if os.path.isfile(bundled) else ""
+
+    def _ref_sleep_face_image(self) -> str:
+        return self._ref_image_path("ref_swap_face_image", self.ref_suyan_path)
+
+    def _ref_winter_image(self) -> str:
+        return self._ref_image_path("ref_swap_winter_image", self.ref_winter_path)
+
+    def _ref_winter_single_image(self) -> str:
+        """单图站点用的冬装参考图：脸部正面 + 冬装正面的拼接照。
+
+        没配拼接图或文件缺失时退回冬装三视图，至少还是同一个人、同一套冬装。
+        """
+        path = self._ref_image_path("ref_swap_winter_single_image",
+                                    self.ref_winter_single_path)
+        return path or self._ref_winter_image()
+
+    def _ref_day_record(self) -> dict:
+        record = self.state.get("ref_day") if isinstance(getattr(self, "state", None), dict) else None
+        return dict(record) if isinstance(record, dict) else {}
+
+    def _today_ref_date(self) -> str:
+        """中国本地日期：跨城旅行时也沿用同一份「今天」的判定。"""
+        try:
+            return str(self._world_strftime("%Y-%m-%d"))
+        except Exception:
+            try:
+                return self.clock.strftime("%Y-%m-%d", self.clock.localtime())
+            except Exception:
+                return ""
+
+    def _yesterday_ref_date(self) -> str:
+        try:
+            return str(self._world_strftime("%Y-%m-%d", self.clock.time() - 86400))
+        except Exception:
+            return ""
+
+    def _winter_ref_active(self, style: str | None = None) -> bool:
+        """今天是不是要全天用冬装参考图（按当天早上那次判定）。"""
+        if self._style(style) != STYLE_REALISTIC:
+            return False
+        if not self._ref_winter_image():
+            return False
+        return ref_swap.winter_active(self._ref_day_record(), self._today_ref_date())
+
+    def _bare_face_ref_active(self, scene: dict | None = None,
+                              style: str | None = None) -> bool:
+        """22 点后在室内睡觉房间（网吧包厢、事件场景不算）换素颜脸部参考图。"""
+        if self._style(style) != STYLE_REALISTIC:
+            return False
+        if not self._ref_sleep_face_image():
+            return False
+        try:
+            hour = scene_hour(scene) if isinstance(scene, dict) else None
+        except Exception:
+            hour = None
+        return ref_swap.bare_face_active(scene, hour)
+
+    def _legacy_photo_refs(self, scene: dict | None = None,
+                           style: str | None = None,
+                           look: dict | None = None) -> tuple[str | None, str | None, str | None]:
+        """原有规则算出来的（人物参考图, 脸部参考图, 单图站点人物参考图）；None = 自动挑。
+
+        「换装」时（点单换装 / 随机衣服特写 / 事件服装 / 睡衣 / 校服等）衣服由提示词
+        决定，参考图只贴头部：多图站点贴正脸 + 侧头，单图站点只贴正脸，避免参考图
+        里的旧衣服串到新衣服上（见 `_head_only_refs`）。
+        """
+        if isinstance(look, dict) and look.get("restyle"):
+            head = self._head_only_refs(scene, style)
+            if head:
+                logger.info("[selfie] 换装：参考图只贴头部，不贴参考图里的衣服")
+                return head
+        if not self._ref_swap_enabled():
+            return None, None, None
+        ref = single_ref = None
+        if self._winter_ref_active(style):
+            ref = self._ref_winter_image() or None
+            single_ref = self._ref_winter_single_image() or ref
+        face = self._ref_sleep_face_image() if self._bare_face_ref_active(scene, style) else None
+        return (ref or None), (face or None), (single_ref or None)
+
+    # ---------------- 工作台「参考图」页 ----------------
+    def _ref_library(self):
+        """参考图库实例（工作台「参考图」页上传的图片、槽位和条件）。"""
+        root = os.path.abspath(os.path.join(
+            str(getattr(self, "data_dir", "") or self.plugin_dir), "reference_images"))
+        library = getattr(self, "_ref_store", None)
+        if library is None or os.path.abspath(str(getattr(library, "root", ""))) != root:
+            library = self._ref_store = ref_library.ReferenceLibrary(root)
+        return library
+
+    def _builtin_ref_plan(self) -> dict:
+        """工作台「参考图」页「填入内置参考图」用的那几张图。
+
+        照当前风格和角色配置算出「没接管时本来会用哪几张」：主站全身三视图、主站头部
+        参考图、副站单图参考图。页面把这几张导入图片墙并填好槽位之后，出图用的还是
+        同一批图，只是从此可以在页面上替换、也能被条件参考图覆盖。
+        """
+        style = self._style(None)
+        body = self._pick_ref(style) or ""
+        head = self._face_ref(style) or ""
+        if head and body and os.path.abspath(head) == os.path.abspath(body):
+            head = ""
+        single = self._pick_ref(style, single=True) or ""
+        if single and body and os.path.abspath(single) == os.path.abspath(body):
+            single = ""
+        suffix = "二次元" if style == STYLE_ANIME else "真人"
+        return {
+            "style": style,
+            "labels": {"body": f"内置{suffix}全身三视图",
+                       "head": f"内置{suffix}头部参考图",
+                       "backup": f"内置{suffix}单图参考图"},
+            "main": {"dual": bool(head), "body": body, "head": head},
+            "backup": {"enabled": bool(single), "single": True,
+                       "image": single, "image2": ""},
+        }
+
+    def _ref_rolls_today(self) -> dict:
+        """今天「概率条件」的摇奖结果（7 点摇一次，一天沿用）。"""
+        record = self.state.get("ref_roll") if isinstance(getattr(self, "state", None), dict) else None
+        if not isinstance(record, dict) or record.get("date") != self._today_ref_date():
+            return {}
+        rolls = record.get("rolls")
+        return dict(rolls) if isinstance(rolls, dict) else {}
+
+    def _ensure_ref_roll(self) -> dict:
+        """每天早上 7 点给「概率条件」摇一次，摇中就整天穿那一张；7 点前沿用前一天。"""
+        try:
+            conditions = [item for item in self._ref_library().document()["conditions"]
+                          if item.get("type") == "probability"]
+        except Exception as e:  # noqa: BLE001 - 参考图库坏了不能拖垮拍照
+            logger.warning(f"[selfie] 读取概率参考图条件失败: {e!r}")
+            return {}
+        if not conditions:
+            return {}
+        today = self._today_ref_date()
+        if not today:
+            return {}
+        record = self.state.get("ref_roll")
+        if isinstance(record, dict) and record.get("date") == today and record.get("final"):
+            return self._ref_rolls_today()
+        try:
+            hour = int(self._world_localtime().tm_hour)
+        except Exception:
+            hour = 12
+        if (hour < 7 and isinstance(record, dict)
+                and record.get("date") == self._yesterday_ref_date()):
+            carried = {"date": today, "rolls": dict(record.get("rolls") or {}),
+                       "final": False, "carried": True}
+            self.state["ref_roll"] = carried
+            return dict(carried["rolls"])
+        rolls = {}
+        for condition in conditions:
+            try:
+                percent = float(condition.get("percent") or 0)
+            except (TypeError, ValueError):
+                percent = 0.0
+            rolls[str(condition.get("id") or "")] = self.rng.random() * 100.0 < percent
+        self.state["ref_roll"] = {
+            "date": today, "rolls": rolls, "final": True,
+            "checked_at": self._world_local_datetime(self.clock.time()).isoformat(),
+        }
+        self._save_state()
+        logger.info(
+            "[selfie] 今日概率参考图判定："
+            + "、".join(f"{cid}={'用' if hit else '不用'}" for cid, hit in rolls.items())
+        )
+        return rolls
+
+    def _ref_today(self):
+        """今天的日期对象（日期条件用）；取不到返回 None。"""
+        today = self._today_ref_date()
+        try:
+            return datetime.strptime(today, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return None
+
+    def _ref_plan(self, scene: dict | None = None, style: str | None = None,
+                  look: dict | None = None) -> dict:
+        """这次出图每个站点要贴的参考图。
+
+        优先级（从高到低）：条件参考图 → 原有的夜间素颜 / 低温冬装 / 换装只贴头部
+        → 工作台「参考图」页的默认参考图 → 原来的自动挑图。
+
+        返回 ``{"main": (...), "backup": (...), "explicit": bool, "ref", "face_ref",
+        "single_ref", "head_only", "condition"}``；``explicit`` 为真表示要让
+        image_transport 按站点直接贴这些图（不再自动挑）。
+        """
+        legacy_ref, legacy_face, legacy_single = self._legacy_photo_refs(scene, style, look)
+        plan = {
+            "main": (), "backup": (), "explicit": False,
+            "ref": legacy_ref, "face_ref": legacy_face, "single_ref": legacy_single,
+            "head_only": self._restyle_head_only(scene, style, look),
+            "condition": None, "condition_slot": "",
+        }
+        try:
+            library = self._ref_library()
+            configured = library.configured()
+            slots = library.slot_paths() if configured else {}
+            picked = {}
+            if configured:
+                picked = ref_library.resolve_conditions(
+                    library.condition_rows(), today=self._ref_today(),
+                    mean=self._ref_day_record().get("mean"), rolls=self._ref_rolls_today())
+        except Exception as e:  # noqa: BLE001 - 参考图库异常时退回原有规则
+            logger.warning(f"[selfie] 读取参考图库失败，按原有规则挑图: {e!r}")
+            configured, slots, picked = False, {}, {}
+
+        def condition_path(slot):
+            return str((picked.get(slot) or {}).get("path") or "")
+
+        if not configured:
+            return plan
+        plan["explicit"] = True
+        # 换装：衣服由提示词决定，只贴头部。头部参考图优先用页面配的「主站参考图2」，
+        # 没配才退回归内置的 ref_real_face / ref_real_head_side。
+        restyle = bool(isinstance(look, dict) and look.get("restyle"))
+        head_refs = self._head_only_refs(scene, style)
+        if restyle and (head_refs or slots.get("main2")):
+            body_override = condition_path("main1")
+            if body_override:
+                plan["main"] = (body_override, condition_path("main2") or "")
+                plan["head_only"] = False
+                plan["condition"] = picked.get("main1")
+                plan["condition_slot"] = "main1"
+                plan["backup"] = (condition_path("backup1") or slots.get("backup1")
+                                  or body_override,)
+            else:
+                primary = condition_path("main2") or slots.get("main2") or legacy_ref \
+                    or (head_refs[0] if head_refs else "") or ""
+                secondary = legacy_face or (head_refs[1] if head_refs else "") or ""
+                plan["main"] = (primary, secondary)
+                plan["head_only"] = True
+                plan["condition"] = picked.get("main2")
+                plan["condition_slot"] = "main2" if condition_path("main2") else ""
+                plan["backup"] = (condition_path("backup1") or slots.get("backup1") or primary,)
+        else:
+            plan["head_only"] = False
+            main1 = condition_path("main1") or legacy_ref or slots.get("main1") \
+                or self._pick_ref(style) or ""
+            main2 = condition_path("main2") or legacy_face or slots.get("main2") \
+                or self._face_ref(style) or ""
+            backup1 = condition_path("backup1") or legacy_face or legacy_single \
+                or slots.get("backup1") or self._pick_ref(style, single=True) or ""
+            backup2 = condition_path("backup2") or slots.get("backup2") or ""
+            plan["main"] = (main1, main2)
+            plan["backup"] = (backup1, backup2)
+            if condition_path("main1"):
+                plan["condition"] = picked.get("main1")
+                plan["condition_slot"] = "main1"
+            elif condition_path("main2"):
+                plan["condition"] = picked.get("main2")
+                plan["condition_slot"] = "main2"
+        plan["ref"] = plan["main"][0] or None
+        plan["face_ref"] = plan["main"][1] or None
+        plan["single_ref"] = plan["backup"][0] or None
+        return plan
+
+    def _ref_condition_body_active(self, scene: dict | None = None,
+                                   style: str | None = None) -> bool:
+        """条件参考图换了「主站参考图1（全身）」：这套衣服以参考图为准。"""
+        try:
+            return self._ref_plan(scene, style)["condition_slot"] == "main1"
+        except Exception:
+            return False
+
+    def _generation_refs(self, scene: dict | None = None, style: str | None = None,
+                         look: dict | None = None) -> dict:
+        """给 ``_generate`` 的参考图关键字参数（按站点显式给图时多传 main/backup）。"""
+        plan = self._ref_plan(scene, style, look)
+        refs = {
+            "ref": plan.get("ref"), "face_ref": plan.get("face_ref"),
+            "single_ref": plan.get("single_ref"), "head_only": bool(plan.get("head_only")),
+        }
+        if plan.get("explicit"):
+            refs["main_refs"] = tuple(x for x in plan.get("main") or () if x)
+            refs["backup_refs"] = tuple(x for x in plan.get("backup") or () if x)
+        return refs
+
+    def _photo_refs(self, scene: dict | None = None,
+                    style: str | None = None,
+                    look: dict | None = None) -> tuple[str | None, str | None, str | None]:
+        """这次出图的（人物参考图, 脸部参考图, 单图站点人物参考图）；None = 自动挑。"""
+        plan = self._ref_plan(scene, style, look)
+        return plan.get("ref") or None, plan.get("face_ref") or None, \
+            plan.get("single_ref") or None
+
+    def _ref_outfit_wear(self, look: dict | None) -> str:
+        """参考图决定衣服时，提示词里的穿着短句（整套衣服以参考图为准）。"""
+        custom = str((look or {}).get("ref_outfit_text") or "")
+        if custom:
+            return custom
+        return WINTER_REF_OUTFIT_NOCOAT if (look or {}).get("coat_off") else WINTER_REF_OUTFIT_TEXT
+
+    def _workspace_preview_refs(self, *, bare_face: bool = False,
+                                style: str | None = None,
+                                ref_outfit: dict | None = None) -> tuple | None:
+        """生图测试的参考图覆盖；None = 交给当天的规则自动挑。
+
+        - 「素颜」勾选：强制用卸妆后的素颜脸部参考图；
+        - 选了工作台里起过名字的衣服参考图：主站和副站都贴那张图。
+        这些只在写实风格下生效。
+        """
+        if self._style(style) != STYLE_REALISTIC:
+            return None
+        outfit = str((ref_outfit or {}).get("path") or "") if isinstance(ref_outfit, dict) else ""
+        if outfit:
+            face = self._ref_sleep_face_image() if bare_face else None
+            return (outfit, face or None, outfit)
+        if not bare_face:
+            return None
+        face = self._ref_sleep_face_image()
+        return None, (face or None), None
+
+    async def _daily_mean_temp(self, city: str, district: str = ""):
+        """查一次所在城市当日平均气温；没坐标、网络失败都返回 None。"""
+        try:
+            name = str(district or "").strip() or self._world_profile().home_district
+            lat = lon = None
+            catalog = self._city_catalog()
+            if catalog:
+                try:
+                    lat, lon = catalog.coords(city, name)
+                except Exception:
+                    lat = lon = None
+            if lat is None or lon is None:
+                coords = self._district_coords(name)
+                if coords:
+                    lat, lon = coords
+            if lat is None or lon is None:
+                raise ValueError("该城市还没有可用坐标")
+            fetcher = getattr(self, "daily_weather_fetcher", None) or fetch_daily_mean
+            return parse_daily_mean(await fetcher(lat, lon))
+        except Exception as e:
+            logger.warning(f"[selfie] {city or '当前城市'}当日平均气温查询失败: {e!r}")
+            return None
+
+    async def _ensure_ref_day(self, scene: dict | None = None) -> dict:
+        """每天早上 7 点判一次今天的冬装参考图，全天沿用，跨城旅行不重判。
+
+        - 7 点之前还没判：沿用前一天的结论，半夜不来回换参考图；
+        - AstrBot 当天 7 点没在运行：当天第一次取场景时补判；
+        - 气温查不到：先不判（保留原来的羽绒服提示词兜底），半小时后再试。
+        """
+        # 「概率条件参考图」也是每天 7 点判一次，和冬装判定共用这个入口
+        try:
+            self._ensure_ref_roll()
+        except Exception as e:  # noqa: BLE001 - 概率摇奖坏了不能拖垮拍照
+            logger.warning(f"[selfie] 概率参考图判定失败: {e!r}")
+        if not self._ref_swap_enabled() or not self._ref_winter_image():
+            return {}
+        today = self._today_ref_date()
+        if not today:
+            return {}
+        now = self.clock.time()
+        record = self._ref_day_record()
+        if record.get("date") == today and record.get("final"):
+            return record
+        try:
+            retry_at = float(record.get("retry_at") or 0)
+        except (TypeError, ValueError):
+            retry_at = 0
+        if retry_at and now < retry_at:
+            return record
+        hour = int(self._world_localtime().tm_hour)
+        if hour < 7 and record.get("date") == self._yesterday_ref_date() and "winter" in record:
+            carried = {
+                "date": today, "city": record.get("city"), "mean": record.get("mean"),
+                "winter": bool(record.get("winter")), "final": False, "carried": True,
+                "threshold": record.get("threshold", self._ref_swap_threshold()),
+            }
+            self.state["ref_day"] = carried
+            return carried
+        scene = scene if isinstance(scene, dict) else {}
+        city = str(scene.get("city") or self._current_city() or "")
+        district = str(scene.get("district") or "")
+        mean = await self._daily_mean_temp(city, district)
+        threshold = self._ref_swap_threshold()
+        winter = ref_swap.winter_decision(mean, threshold)
+        if winter is None:
+            failed = {"date": today, "city": city, "mean": None, "winter": False,
+                      "final": False, "failed": True, "retry_at": now + 1800,
+                      "threshold": threshold}
+            self.state["ref_day"] = failed
+            return failed
+        record = {"date": today, "city": city, "mean": mean, "winter": winter,
+                  "threshold": threshold, "final": True, "carried": False,
+                  "checked_at": self._world_local_datetime(now).isoformat()}
+        self.state["ref_day"] = record
+        self._save_state()
+        logger.info(
+            f"[selfie] 今日参考图判定：{city}当日平均 {mean:g}℃（阈值 {threshold:g}℃）→ "
+            + ("全天冬装参考图" if winter else "正常参考图")
+        )
+        return record
 
 
 
@@ -3942,7 +4564,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 event.stop_event()
                 return
 
-            # 0) 画风偏好设置：「自拍风格改为二次元 / 以后都用写实」
+            # 0) 风格偏好设置：「自拍风格改为二次元 / 以后都用写实」
             pref_style, rest_text = self._detect_style_pref(text)
             if pref_style:
                 if not self._can_trigger(event, text):
@@ -3952,7 +4574,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 await event.send(MessageChain([
                     Plain(f"好呀，以后给你拍的照片都用{style_name}风格啦～")
                 ]))
-                logger.info(f"[selfie] 用户 {sender} 的画风偏好改为 {pref_style}")
+                logger.info(f"[selfie] 用户 {sender} 的风格偏好改为 {pref_style}")
                 # 这句话里如果还夹着「来一张 / 拍一张 / 特写」，接着拍；否则只记设置
                 if not (self._selfie_match(rest_text)
                         or CLOSEUP_PAT.search(rest_text)
@@ -4064,7 +4686,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     return
             # 她的白天活动自己安排，不接受「去 xx 拍」这种点单（会在接单话里婉拒）
             scene_req = self._detect_scene_request(text)
-            # 画风优先级：本句点名 > 该用户的长期偏好 > 配置默认（真人）
+            # 风格优先级：本句点名 > 该用户的长期偏好 > 配置默认（真人）
             eff_style = style_override or self._user_style(sender)
             await self._send_ack(event, style_override, removal, costume, scene_req)
             self._generating = True
@@ -4284,7 +4906,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         elif self._natural_chat_enabled():
             ack = await self._natural_ack(
                 event,
-                action_line="拍一张近距离特写（画外相机视角）",
+                action_line="拍一张近距离特写（镜头外相机视角）",
                 fallback_pool=list(CLOSEUP_ACK_FALLBACK),
             )
         else:
@@ -4298,13 +4920,16 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return True
 
     # ------------------------------------------------------------------
-    # 互动模块：摸摸 / 捏捏（提示词在小汉堡互动.txt，随机特写摇不到）
+    # 互动模块：摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍（提示词在 interaction.txt）
     # ------------------------------------------------------------------
     async def _handle_interact_request(self, event: AstrMessageEvent, text: str,
                                        sender: str, is_admin: bool) -> bool:
-        """处理「摸摸小汉堡 / 捏捏小汉堡」。返回 True 表示这条消息已经被她接下。
+        """处理带互动触发词的语句。返回 True 表示这条消息已经被她接下。
 
         规则：
+        - 语句里出现摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍等触发词，就按这个词去互动库
+          匹配行首动作词相同的提示词；匹配到多条就随机 roll 一条
+        - 库里没有以这个触发词开头的提示词：回「有点害羞 / 过一会嘛」这类话，不出图
         - 场景（地点/天气/时刻）、衣服、额度、自拍记忆全部走自拍那套，和特写共用
         - 换装、cos 只有能换衣的地点（家里/住宿）才是随时可用，其它地点先婉拒再按既定衣服拍
         - 管理员（admin）保留原逻辑：任意时间可换装/cos，还能「admin摸摸2」点名第几条
@@ -4327,8 +4952,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if admin_mode:
             text = ADMIN_MODE_PAT.sub("", text, count=1).strip(" ，,。;；")
             aliases = "|".join(re.escape(x) for x in (self._profile().name, *self._profile().aliases) if x)
+            words = "|".join(re.escape(word) for word in sorted(
+                self._interact_triggers(), key=len, reverse=True))
             mid = re.search(
-                r"(?:摸摸|捏捏)\s*(?:一下)?\s*(?:" + aliases + r")?\s*[\-:：]?\s*(\d{1,3})",
+                r"(?:" + words + r")\s*(?:一下)?\s*(?:" + aliases + r")?\s*[\-:：]?\s*(\d{1,3})",
                 text,
             )
             if mid:
@@ -4338,6 +4965,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 f"指定编号={forced_id}，剩余文本={text[:40]}"
             )
 
+        # 句子里同时点了「特写 / 自拍」、而库里又没有这个互动词时，让后面的流程接手，
+        # 不要因为一个互动词把明确点单的特写/自拍抢掉（有对应互动提示词时仍以互动为先）。
+        if not forced_id and not self._interact_has_prompt(action) and (
+                CLOSEUP_PAT.search(text) or self._selfie_match(text)):
+            return False
+
         if self._generating:
             await event.send(MessageChain([Plain("等我拍完这张嘛～")]))
             return True
@@ -4346,6 +4979,22 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 Plain(f"今天已经拍够{self._daily_limit()}张啦，明天再给你看～")
             ]))
             return True
+
+        # 触发词在互动库里没有以它开头的提示词：害羞地回一句，不进生图流程。
+        # 管理员用「admin摸摸2」点名编号时仍按编号取，方便测试不同动作词。
+        if not forced_id:
+            pool = self._interact_prompts()
+            if not pool:
+                await event.send(MessageChain([Plain(INTERACT_NO_FILE_TEXT)]))
+                return True
+            if not self._interact_has_prompt(action):
+                await event.send(MessageChain([
+                    Plain(self.rng.choice(INTERACT_SHY_FALLBACK))
+                ]))
+                logger.info(
+                    f"[selfie] 互动词「{action}」在互动库里没有对应提示词，回害羞短句"
+                )
+                return True
 
         style_override = self._detect_style_request(text)
         # 「摘掉帽子 / 脱掉外套」只有主人（管理员）说了才生效，和自拍/特写一致
@@ -4586,9 +5235,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if removal and removal.get("coat_off"):
             hints.append("对方还让你把外套脱掉，可以顺口答应。")
         if style_override == STYLE_ANIME:
-            hints.append("对方点名要二次元动漫画风，可以顺口提一句。")
+            hints.append("对方点名要二次元动漫风格，可以顺口提一句。")
         elif style_override == STYLE_REALISTIC:
-            hints.append("对方点名要写实真人画风，可以顺口提一句。")
+            hints.append("对方点名要写实真人风格，可以顺口提一句。")
         system, prompt = dialogue.ack_prompts(
             persona=await self._persona_prompt(event, conversation_persona),
             user_text=self._clean_text(event) if event is not None else "",
@@ -4666,9 +5315,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if provider is None:
                 return self.rng.choice(fallback_pool) + "🤳"
             if style_override == STYLE_ANIME:
-                style_hint = "对方还点名要这张用二次元动漫画风，可以顺口提一句。"
+                style_hint = "对方还点名要这张用二次元动漫风格，可以顺口提一句。"
             elif style_override == STYLE_REALISTIC:
-                style_hint = "对方还点名要这张用写实真人照片画风，可以顺口提一句。"
+                style_hint = "对方还点名要这张用写实真人照片风格，可以顺口提一句。"
             else:
                 style_hint = ""
             look_hints = []
@@ -4740,7 +5389,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
     async def _photo_caption(self, event, scene: dict, look: dict, *,
                              kind: str, cos_name: str = "") -> str:
-        """图发出去之后她顺口补的一句：用自己的话说明照片里在干什么。"""
+        """生成这张照片的第一人称描述，只用于存档（相册 / 日记 / 照片记忆），不发聊天。
+
+        图片已经发出去了，这段文字用户看不到，所以只等 12 秒、不重试：
+        拿不到就用调用方的固定配文存档，别为了看不见的文字拖住出图任务。
+        """
         history, conversation_persona = await self._conversation_snapshot(event)
         doing_line = str((scene or {}).get("activity") or "").strip()
         if len(doing_line) > 24:
@@ -4759,15 +5412,18 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             user_text=self._clean_text(event) if event is not None else "",
             history=history,
         )
-        return dialogue.usable_caption(await self._llm_text(system, prompt, timeout=15))
+        return dialogue.usable_caption(
+            await self._llm_text(system, prompt, timeout=12, retries=0)
+        )
 
     async def _deliver_photo(self, event, img: bytes, *, scene: dict, look: dict,
                              kind: str, fallback_caption: str,
                              cos_name: str = "") -> str:
         """发一张照片，返回要存档的配文。
 
-        拟人模式：图片单独发（不带任何文字），再用大模型按人格和聊天上下文
-        补一句「她正在干什么」；模型不可用时退回原来的固定配文。
+        拟人模式：图片单独发，发完不再补任何文字——照片里是什么她自己记着就行
+        （生成一份第一人称描述，存进自拍记录 / 相册 / 日记，不发送到聊天）。
+        模型不可用时用原来的固定配文存档，同样不发出去。
         """
         if not self._natural_chat_enabled():
             await event.send(MessageChain([Image.fromBytes(img), Plain(fallback_caption)]))
@@ -4778,14 +5434,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 event, scene, look, kind=kind, cos_name=cos_name,
             )
         except Exception as e:
-            logger.warning(f"[selfie] 照片配文生成失败，用兜底配文: {e!r}")
+            logger.warning(f"[selfie] 照片描述生成失败，用兜底配文存档: {e!r}")
             text = ""
         if not text:
-            text = fallback_caption
-        segments = await self._send_reply(event, text)
-        # 存档保留完整意思；分段之间用逗号接起来，不带句号。
-        if not segments:
-            return text
+            return fallback_caption
+        # 描述只进记忆：按分段规则切成短句、用逗号接成一条存档文本，不往聊天里发。
+        settings = self._astrbot_segmented_settings(event)
+        segments = dialogue.split_like_astrbot(text, settings) or [text]
         return "，".join(segments) if len(segments) > 1 else segments[0]
 
     @staticmethod
@@ -4807,32 +5462,40 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         try:
             scene, _event_action = self._event_photo_scene(await self._get_scene())
             scene = self._roll_home_room(scene)
-            look = self._resolve_look(scene, removal, None, costume, force_costume)
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
             style = self._style(style_override)
-            try:
-                img = await self._generate(
-                    self._selfie_prompt(scene, model, style, look),
-                    model, style, look.get("negative_extra"),
-                )
-            except Exception as e:
-                # 夜间睡衣这条被上游反复拒时，换最保守的一套再拍一次，免得对方什么都收不到；
-                # 额度不足 / key 失效重试也没用，直接上抛。
-                night_names = {s["name"] for s in SLEEPWEAR_SETS}
-                if (str(scene.get("type") or "") not in ("bed", "bed_sleepy")
-                        or str(look.get("name") or "") not in night_names
-                        or str(look.get("name") or "") == SAFE_NIGHT_WEAR_NAME
-                        or self._is_quota_error(e) or "HTTP 401" in str(e)):
-                    raise
-                logger.warning(f"[selfie] 睡衣自拍被拒，换「{SAFE_NIGHT_WEAR_NAME}」再试一次: {e!r}")
-                self.state["night_sleepwear"] = {
-                    "night": self._night_key(self.clock.time()), "name": SAFE_NIGHT_WEAR_NAME
-                }
-                look = self._resolve_look(scene, removal)
-                img = await self._generate(
-                    self._selfie_prompt(scene, model, style, look),
-                    model, style, look.get("negative_extra"),
-                )
+            await self._ensure_ref_day(scene)
+            look = self._resolve_look(scene, removal, None, costume, force_costume,
+                                      style=style)
+            gen_refs = self._generation_refs(scene, style, look)
+            async def _shoot() -> bytes:
+                nonlocal look
+                try:
+                    return await self._generate(
+                        self._selfie_prompt(scene, model, style, look),
+                        model, style, look.get("negative_extra"),
+                        **gen_refs,
+                    )
+                except Exception as e:
+                    # 夜间睡衣这条被上游反复拒时，换最保守的一套再拍一次，免得对方什么都收不到；
+                    # 额度不足 / key 失效重试也没用，直接上抛。
+                    night_names = {s["name"] for s in SLEEPWEAR_SETS}
+                    if (str(scene.get("type") or "") not in ("bed", "bed_sleepy")
+                            or str(look.get("name") or "") not in night_names
+                            or str(look.get("name") or "") == SAFE_NIGHT_WEAR_NAME
+                            or self._is_quota_error(e) or "HTTP 401" in str(e)):
+                        raise
+                    logger.warning(f"[selfie] 睡衣自拍被拒，换「{SAFE_NIGHT_WEAR_NAME}」再试一次: {e!r}")
+                    self.state["night_sleepwear"] = {
+                        "night": self._night_key(self.clock.time()), "name": SAFE_NIGHT_WEAR_NAME
+                    }
+                    look = self._resolve_look(scene, removal, style=style)
+                    return await self._generate(
+                        self._selfie_prompt(scene, model, style, look),
+                        model, style, look.get("negative_extra"),
+                        **gen_refs,
+                    )
+            img = await _shoot()
             caption = f"给你～（{self._scene_caption_tail(scene)}）"
             look_phrase = self._look_caption(look)
             if look_phrase:
@@ -4864,11 +5527,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception as e:
             logger.error(f"[selfie] 自拍生成失败: {e!r}")
             try:
-                if self._is_quota_error(e):
-                    tip = BALANCE_FAIL_TEXT
-                else:
-                    tip = "拍糊了，等我缓缓再拍……"
-                await event.send(MessageChain([Plain(tip)]))
+                await event.send(MessageChain([Plain(self._generation_failure_text(e))]))
             except Exception:
                 pass
             return False
@@ -4955,10 +5614,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         scene = self._event_photo_scene(await self._get_scene())[0]
         diary = await self._diary_text(scene)
         model = str(self._cfg("qzone_model", DEFAULT_QZONE_MODEL))
+        await self._ensure_ref_day(scene)
         look = self._resolve_look(scene)
         img = await self._generate(
             self._selfie_prompt(scene, model, None, look),
             model, None, look.get("negative_extra"),
+            **self._generation_refs(scene, None, look),
         )
         post = None
         # qzone 的 Post.images 声明为 list[str]，直接传 PNG bytes 会过不了

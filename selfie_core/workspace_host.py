@@ -142,10 +142,14 @@ class WorkspaceHostMixin:
 
     async def _workspace_test(self, payload, *, costume_override=None, cue_override=None,
                               scene=None, album_source='test', album_meta=None,
-                              classic=None):
+                              ref_outfit=None):
         """Explicit paid preview. Do not mutate world, photo memory, or user quotas."""
         if payload.get('confirm_paid') is not True:
             raise ValueError('请确认本次测试会调用生图服务')
+        # 测试面板的「素颜」勾选：勾上就强制用卸妆脸参考图，不用等 22 点
+        bare_face = payload.get('bare_face', False)
+        if type(bare_face) is not bool:
+            raise ValueError('素颜选项格式无效')
         from .materials import MaterialStore
         settings = self._workspace_settings()
         paths = {kind: settings[key] for kind, key in (
@@ -155,13 +159,15 @@ class WorkspaceHostMixin:
         store = MaterialStore(root, paths=paths,
                               backup_dir=os.path.join(root, 'material_backups') if root else None,
                               fallback_root=self.plugin_dir)
-        # 经典四档：不换装，直接穿参考图里那套；hat_off / coat_off 由服务端从固定表里取。
-        classic = classic if isinstance(classic, dict) else None
-        if classic is not None:
-            if classic.get('id') not in {-1, -2, -3, -4}:
-                raise ValueError('经典服装编号无效')
-            costume = {'name': str(classic.get('name') or '经典'),
-                       'description': '参考图里的默认服装（不换装）'}
+        # 参考图衣服：不换装，直接穿参考图里那套；hat_off / coat_off 由服务端按
+        # 参考图上勾过的「可摘帽子 / 可脱外套」校验后传进来。
+        if ref_outfit is not None:
+            # 服务端已经校验过参考图还在、名字和帽/外套档位一致，这里只取名字做相册记录
+            if (not isinstance(ref_outfit, dict)
+                    or not str(ref_outfit.get('name') or '').strip()):
+                raise ValueError('参考图衣服格式无效')
+            costume = {'name': str(ref_outfit['name'])[:40],
+                       'description': '参考图里的这套衣服（不换装）'}
         elif costume_override is None:
             costume = next((x for x in store.list('costume') if x['id'] == int(payload['costume_id'])), None)
         else:
@@ -193,6 +199,10 @@ class WorkspaceHostMixin:
             if not isinstance(text, str) or not text.strip():
                 raise ValueError('动作描述格式无效')
             cue = {'text': text.strip()[:4000]}
+        # 互动来源：动作词由服务端从互动库条目里取出，决定用「镜头外伸一只手」的互动构图。
+        cue_kind = ''
+        if isinstance(cue_override, dict):
+            cue_kind = str(cue_override.get('kind') or '').strip()[:8]
         if not costume or not cue:
             raise ValueError('衣服号或特写号不存在，请刷新素材列表')
 
@@ -238,7 +248,9 @@ class WorkspaceHostMixin:
             meta.update({key: value for key, value in album_meta.items()
                          if isinstance(key, str) and (isinstance(value, str) or value is None
                                                       or isinstance(value, (int, float, bool)))})
-
+        # 互动来源：相册记录里标出用的动作词，方便回看是哪一种互动
+        if cue_kind and isinstance(meta, dict):
+            meta.setdefault("interaction_action", cue_kind)
         if not hasattr(self, '_request_admission_lock'):
             self._request_admission_lock = asyncio.Lock()
         async with self._request_admission_lock:
@@ -247,21 +259,42 @@ class WorkspaceHostMixin:
             self._generating = True
             try:
                 await self._workspace_scene_context(scene, now)
-                if classic is not None:
+                ensure = getattr(self, '_ensure_ref_day', None)
+                if ensure is not None:
+                    try:
+                        await ensure(scene)
+                    except Exception:
+                        pass
+                style = self._style()
+                # 测试面板的参考图覆盖：素颜勾选强制用素颜脸部图，参考图衣服贴那张衣服图
+                refs = None
+                refs_getter = getattr(self, '_workspace_preview_refs', None)
+                if callable(refs_getter):
+                    getter_kwargs = {'bare_face': bare_face, 'style': style}
+                    if ref_outfit is not None:
+                        getter_kwargs['ref_outfit'] = ref_outfit
+                    try:
+                        refs = refs_getter(**getter_kwargs)
+                    except Exception:
+                        refs = None
+                if ref_outfit is not None:
+                    # 工作台给参考图起了衣服名字：整套衣服以那张图为准，帽/外套按档位去掉
                     look = self._resolve_look(scene, removal={
-                        'hat_off': bool(classic.get('hat_off')),
-                        'coat_off': bool(classic.get('coat_off')),
-                    })
+                        'hat_off': bool(ref_outfit.get('hat_off')),
+                        'coat_off': bool(ref_outfit.get('coat_off')),
+                    }, style=style, ref_outfit=ref_outfit)
                 else:
                     look = self._resolve_look(scene, costume={'name': costume['name'],
-                                              'desc': costume['description']}, force_costume=True)
+                                              'desc': costume['description']}, force_costume=True,
+                                              style=style)
                 model = str(self._cfg('model', 'gpt-image-2.5-flare'))
                 if selfie_action is not None:
                     # 「自拍」来源：用选中的表情/手势拍一张前置摄像头自拍，构图按自拍提示词走。
-                    data = await self._generate_selfie_shot(scene, model, self._style(), look,
-                                                            selfie_action)
+                    data = await self._generate_selfie_shot(scene, model, style, look,
+                                                            selfie_action, refs=refs)
                 else:
-                    data = await self._generate_closeup(scene, model, self._style(), look, cue)
+                    data = await self._generate_closeup(scene, model, style, look, cue,
+                                                        refs=refs, kind=cue_kind)
                 try:
                     self._album().save(data, source=album_source, meta=meta)
                 except Exception as album_err:
@@ -675,7 +708,15 @@ class WorkspaceHostMixin:
                 pending = []
                 directory = Path(self.data_dir) / 'livingmemory'
                 async with self._request_admission_lock:
-                    await self._get_scene()
+                    scene = await self._get_scene()
+                    # 每天 7 点用当时的城市判一次冬装参考图；这里每 30 秒经过一次，
+                    # 只要当天还没判就补判，跨城旅行后也不再按当前城市重判。
+                    ensure = getattr(self, '_ensure_ref_day', None)
+                    if ensure is not None:
+                        try:
+                            await ensure(scene)
+                        except Exception:
+                            pass
                     now = self._workspace_schedule_now()
                     engine = LivingEngine(self.state, self.rng)
                     records = self.state.get('living', {}).get('records', {})

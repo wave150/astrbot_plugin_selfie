@@ -61,6 +61,10 @@ config.private.json
 !/assets/ref_real_front_9x16.png
 !/assets/ref_real_face.png
 !/assets/ref_real_faceandbody.png
+# 素颜 / 冬装参考图（夜间与低温日替换用，随内置角色一起发布）
+!/assets/ref_suyan.png
+!/assets/ref_winter.png
+!/assets/ref_winter_single.png
 
 # Backup archives must not be published
 *.zip

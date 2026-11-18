@@ -297,6 +297,55 @@
   .room-row textarea { min-height: 104px; }
   .muted-inline { color: var(--muted); font-size: 12px; }
   code { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+
+  /* ---------------- 参考图页（上传 / 裁剪 / 槽位 / 条件） ---------------- */
+  .ref-slot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+  @media (max-width: 700px) { .ref-slot-grid { grid-template-columns: minmax(0, 1fr); } }
+  .ref-slot { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+  .ref-slot.is-off { opacity: 0.5; }
+  .ref-slot-title { font-size: 13px; font-weight: 600; }
+  .ref-slot-body { display: flex; align-items: center; gap: 12px; }
+  .ref-slot-thumb { display: block; width: 88px; height: 88px; object-fit: cover; border-radius: 9px; border: 1px solid var(--border); background: var(--panel); cursor: zoom-in; }
+  .ref-slot-empty { display: flex; align-items: center; justify-content: center; width: 88px; height: 88px; border: 1px dashed var(--border-strong); border-radius: 9px; background: var(--panel); color: var(--muted); font-size: 11.5px; text-align: center; }
+  .ref-slot-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .ref-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .ref-card { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); overflow: hidden; }
+  .ref-card-thumb { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--panel); border: 0; cursor: zoom-in; }
+  .ref-card-thumb.is-fail { cursor: default; }
+  .ref-card-body { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; }
+  .ref-card-name { font-size: 12.5px; font-weight: 600; word-break: break-word; }
+  .ref-card-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .ref-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .ref-tag { padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--accent-weak); color: var(--accent); font-size: 10.5px; }
+  .ref-state { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--accent-weak); }
+  .ref-state-row { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.7; }
+  .ref-card-actions { display: flex; gap: 6px; padding: 0 10px 10px; }
+  .ref-cond-explain { padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--accent-weak); font-size: 12.5px; line-height: 1.65; }
+  .ref-cond-list { display: flex; flex-direction: column; gap: 10px; }
+  .ref-cond { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+  .ref-cond-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ref-cond-row .input { width: auto; }
+  .ref-cond-row .ref-cond-image { min-width: 130px; max-width: 190px; }
+  .ref-cond-row .ref-cond-type { min-width: 110px; }
+  .ref-cond-row .ref-cond-op { min-width: 72px; }
+  .ref-cond-row .ref-cond-num { width: 74px; }
+  .ref-cond-row .ref-cond-year { width: 82px; }
+  .ref-cond-extra { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+  .ref-cond-targets { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; }
+  .ref-cond-targets label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+  .ref-cond-targets input { accent-color: var(--accent); }
+  .ref-cond-site { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+  .ref-cond-site-backup { background: var(--panel); }
+  .ref-cond-site-label { min-width: 76px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .ref-cond-site-slot { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+  .ref-cond-site-slot .ref-cond-image { min-width: 150px; max-width: 210px; }
+  .ref-cond-del { margin-left: auto; }
+  .ref-crop-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; white-space: normal; }
+  .ref-crop-stage { position: relative; display: inline-block; max-width: 100%; overflow: hidden; line-height: 0; cursor: crosshair; touch-action: none; user-select: none; }
+  .ref-crop-img { display: block; width: auto; height: auto; max-width: 100%; max-height: 520px; -webkit-user-drag: none; }
+  .ref-crop-sel { position: absolute; left: 0; top: 0; box-sizing: border-box; border: 1.5px solid var(--accent); box-shadow: 0 0 0 9999px rgba(10, 14, 22, 0.55); cursor: move; touch-action: none; }
+  .ref-crop-handle { position: absolute; right: 1px; bottom: 1px; width: 14px; height: 14px; border: 2px solid #fff; border-radius: 4px; background: var(--accent); cursor: nwse-resize; touch-action: none; }
+  .ref-crop-hint { font-size: 11.5px; color: var(--muted); text-align: center; }
 </style>
 </head>
 <body>
@@ -309,7 +358,7 @@
         <span class="badge" id="rev-badge">revision —</span>
         <span class="badge badge-busy" id="busy-badge" hidden>运行中…</span>
       </div>
-      <div class="appbar-sub">生图测试 · 素材入库 · 世界设置 · 事件编辑</div>
+      <div class="appbar-sub">生图测试 · 参考图上传 · 素材入库 · 世界设置 · 事件编辑</div>
     </div>
     <div class="appbar-side">
       <span class="conn conn-loading" id="conn"><span class="conn-dot" id="conn-dot"></span><span id="conn-text">连接中…</span></span>
@@ -327,6 +376,7 @@
 
   <div id="main">
     <nav class="tabs" role="tablist" aria-label="自拍工作台功能">
+      <button class="tab" type="button" role="tab" id="tab-refs" aria-controls="panel-refs" aria-selected="false" data-tab="refs">参考图</button>
       <button class="tab" type="button" role="tab" id="tab-test" aria-controls="panel-test" aria-selected="true" data-tab="test">生图测试</button>
       <button class="tab" type="button" role="tab" id="tab-material" aria-controls="panel-material" aria-selected="false" data-tab="material">添加素材</button>
       <button class="tab" type="button" role="tab" id="tab-world" aria-controls="panel-world" aria-selected="false" data-tab="world">世界设置</button>
@@ -343,7 +393,7 @@
           <div class="loc-mount" id="t-loc"></div>
           <div class="field">
             <label class="field-label" for="t-scene">场景（可编辑）</label>
-            <textarea class="input textarea" id="t-scene" rows="3" placeholder="选择地点/事件/房间后自动填入，也可以自己改；生成时按这里的内容画背景。"></textarea>
+            <textarea class="input textarea" id="t-scene" rows="3" placeholder="选择地点/事件/房间后自动填入，也可以自己改；生成时按这里的内容拍背景。"></textarea>
             <div class="field-hint" id="t-scene-hint"></div>
           </div>
           <div class="field">
@@ -359,6 +409,7 @@
               <label class="field-label" for="t-costume-source">服装来源</label>
               <select class="input" id="t-costume-source">
                 <option value="daily">日常服装（服装库）</option>
+                <option value="ref">参考图衣服（参考图页）</option>
                 <option value="event">事件服装（事件素材）</option>
               </select>
             </div>
@@ -374,6 +425,7 @@
                 <option value="meal">吃饭（菜品库）</option>
                 <option value="sleep">睡觉（夜间动作）</option>
                 <option value="selfie">自拍（自拍动作库）</option>
+                <option value="interaction">互动（互动库）</option>
               </select>
             </div>
             <div class="field">
@@ -384,13 +436,20 @@
             <div class="field" id="t-meal-field" hidden>
               <label class="field-label" for="t-meal">菜品</label>
               <select class="input" id="t-meal"></select>
-              <div class="field-hint">菜品取自「添加素材 → 菜品」，生成时会把菜、主食和餐具一起写进画面。</div>
+              <div class="field-hint">菜品取自「添加素材 → 菜品」，生成时会把菜、主食和餐具一起写进照片。</div>
             </div>
           </div>
           <div class="field" id="t-event-pick" hidden>
             <label class="field-label" for="t-event-id">事件素材来源</label>
             <select class="input" id="t-event-id"></select>
             <div class="field-hint" id="t-event-hint"></div>
+          </div>
+          <div class="field">
+            <label class="checkline" for="t-bare-face">
+              <input type="checkbox" id="t-bare-face" />
+              <span>素颜（脸部参考图换成卸妆后的素颜三视图）</span>
+            </label>
+            <div class="field-hint">勾上后这张测试图强制用「夜间睡觉房间」那张素颜脸部参考图，不用等到 22:00；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。</div>
           </div>
         </section>
       </div>
@@ -406,9 +465,11 @@
         </div>
         <div class="row-actions">
           <button class="btn btn-primary" id="t-go" type="button">生成测试图</button>
+          <button class="btn btn-danger-text" id="t-cancel" type="button" hidden>取消生图</button>
           <span class="status" id="t-status"></span>
         </div>
         <div class="field-hint" id="t-avail"></div>
+        <div class="field-hint">生图过程中可以点「取消生图」马上停下；直接退出自拍工作台（关页 / 刷新 / 回插件列表）也会自动取消这次生图，不会再白跑。</div>
       </section>
 
       <section class="card">
@@ -710,6 +771,73 @@
       <p class="card-hint">仅展示后端已有日计划、已接受事件及实际观察记录。计划不是已经发生的活动；没有记录的时间留空，不补编离线生活。</p>
       <div id="schedule-status" class="status"></div><div id="schedule-list"></div></section>
     </section>
+
+    <section class="panel-view" id="panel-refs" role="tabpanel" aria-labelledby="tab-refs" hidden>
+      <section class="card">
+        <h2 class="card-title">参考图现在从哪来</h2>
+        <div class="ref-state" id="ref-state">
+          <div class="ref-state-row"><span class="ref-tag" id="ref-state-tag">未接管</span><span id="ref-state-text">正在读取参考图状态</span></div>
+          <div class="row-actions" style="margin-top:0">
+            <button class="btn btn-primary" id="ref-adopt" type="button">填入内置参考图</button>
+            <span class="status" id="ref-adopt-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">上传参考图</h2>
+        <p class="card-hint">点下面的按钮从本地选图片上传（支持 JPEG / PNG / WebP，单张不超过 8MB）；上传只是把图加进下面的图片墙，不会覆盖任何东西，也不会自动替换槽位——想让它当参考图，还要在槽位里选它并保存</p>
+        <input id="ref-file" type="file" accept="image/*" hidden />
+        <div class="row-actions">
+          <button class="btn btn-primary" id="ref-pick" type="button">打开本地文件</button>
+          <span class="status" id="ref-status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">主站参考图</h2>
+        <p class="card-hint">主站参考图决定生图时人物的长相和身体；勾上「生图站支持双参考图」后可以同时用一张全身图和一张头部图，没勾时只用第 1 个槽位</p>
+        <label class="switch"><input type="checkbox" id="ref-main-dual" /> 生图站支持双参考图</label>
+        <div class="ref-slot-grid" id="ref-main-slots"></div>
+        <div class="row-actions">
+          <button class="btn btn-primary" id="ref-save-slots" type="button">保存主站/副站设置</button>
+          <span class="status" id="ref-slot-status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">副站参考图</h2>
+        <p class="card-hint">副站是另一条生图通道；只有勾上「启用副站参考图」才会用到这里的图；勾选项改动统一由上面主站卡里的「保存主站/副站设置」保存，上传/更换和清除会立即写入</p>
+        <div class="row-actions" style="margin-top:0">
+          <label class="switch"><input type="checkbox" id="ref-backup-enabled" /> 启用副站参考图</label>
+          <label class="switch"><input type="checkbox" id="ref-backup-single" /> 副站只有单参考图</label>
+        </div>
+        <div id="ref-backup-wrap" hidden>
+          <div class="ref-slot-grid" id="ref-backup-slots"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">已上传的参考图 <span class="badge" id="ref-count">0</span></h2>
+        </div>
+        <p class="card-hint">点缩略图看原图；「改名」「删除」直接生效；删除被条件用到的图时，只会清掉条件里用到它的那个位置（条件本身保留）；点「衣服设置」可以给这套衣服起名字，起名后生图测试的「参考图衣服」里会多出这几档</p>
+        <div class="empty" id="ref-wall-empty">图片墙还是空的；上传的图都会放在这里，不会覆盖已有内容</div>
+        <div class="ref-wall" id="ref-wall"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">条件参考图</h2>
+        <div class="ref-cond-explain">一条条件可以同时设置主站和副站的参考图：主站参考图1 / 2、副站参考图1 / 2 各选一张，选「不替换」的位置保持默认参考图；同一个位置有多条条件同时命中时，按 <strong>日期 &gt; 气温 &gt; 概率 &gt; 默认参考图</strong> 的顺序生效；气温用当天平均气温（和冬装判定同一份）；概率条件每天早上 7 点判一次，判到就整天沿用这一套；想让它同时出现在生图测试的参考图衣服里，去图片墙点「衣服设置」给它起个名字</div>
+        <div class="field-hint" id="ref-cond-empty">先在上面上传参考图，再来加条件</div>
+        <div class="ref-cond-list" id="ref-conds"></div>
+        <div class="row-actions">
+          <button class="btn" id="ref-cond-add" type="button">添加条件</button>
+          <button class="btn btn-primary" id="ref-cond-save" type="button">保存条件</button>
+          <span class="status" id="ref-cond-status"></span>
+        </div>
+      </section>
+    </section>
   </div>
 </div>
 
@@ -740,13 +868,13 @@
   var FORMAT_HINTS = {
     costume: "服装草稿必须是单行：名称 | 别名（逗号分隔，可空） | 服装描述 —— 用 | 分成三段。",
     closeup: "特写草稿必须是单行构图描述（机位、动作、光线都可以写进去）。",
-    interaction: "互动草稿必须是单行，并以「摸摸：」或「捏捏：」开头。",
+    interaction: "互动草稿必须是单行，开头是「动作词：【机位短语】；正文」（动作词用摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍之一，例如「捏捏：【仰脸俯拍＋双手互动】；…」）；这是拍一张照片，正文只写按下快门那一刻定格的画面，不要「先…再…随后…」这种先后过程",
     meal: "菜品草稿必须是单行：「菜名 | 约100字描述」，只写菜、主食、餐具和桌面，不写人物。",
-    selfie: "自拍动作草稿必须是单行：「名字 | 表情 | 手势」，前置摄像头自拍、近景只拍上半身；画面里不出现手机/相机/自拍杆，手势只用没拿手机的那只手。"
+    selfie: "自拍动作草稿必须是单行：「名字 | 表情 | 手势」，前置摄像头自拍、近景只拍上半身；照片里不出现手机/相机/自拍杆，手势只用没拿手机的那只手。"
   };
   /* 生图测试：动作来源选「吃饭」时，「动作 / 特写」只列这 5 套吃饭机位（顺序同后端 meal.MEAL_SETUPS）。 */
   var MEAL_SETUP_OPTIONS = [
-    { value: "0", label: "吃饭机位 1：近景自拍（上半身和餐桌入画）" },
+    { value: "0", label: "吃饭机位 1：近景自拍（上半身和餐桌入镜）" },
     { value: "1", label: "吃饭机位 2：斜上方俯拍（餐桌和饭菜占满下半幅）" },
     { value: "2", label: "吃饭机位 3：把碗端到胸前（碗里的饭看得清）" },
     { value: "3", label: "吃饭机位 4：餐桌对面拍（她、碗筷和菜同框）" },
@@ -778,7 +906,6 @@
     revision: 0,
     materials: { costume: [], closeup: [], interaction: [], meal: [], selfie: [] },
     materialRevisions: { costume: "", closeup: "", interaction: "", meal: "", selfie: "" },
-    classicCostumes: [],
     materialQuery: "",
     worldSetup: null,
     cities: [],
@@ -786,6 +913,7 @@
     homeRoomRows: [],
     homeRoomDefaults: null,
     overnightScenes: [],
+    referenceLibrary: null,
     lookupCity: null,
     outfitSeq: 0,
     events: [],
@@ -814,6 +942,8 @@
     draftCity: null,
     draftImage: "",
     activeJobs: {},
+    testJobId: "",
+    testCancelled: false,
     busy: {}
   };
 
@@ -1476,8 +1606,22 @@
     writePendingJobs(readPendingJobs().filter(function (item) { return item.job_id !== jobId; }));
   }
 
-  /* 页面重新打开后接管没跑完的任务：继续轮询，成功后照常提示并刷新数据。 */
-  async function resumePendingJobs() {
+  /* 退出自拍工作台（关页 / 刷新 / 回插件列表）时，把还在跑的付费生图取消掉；
+     消息发不出去也不要紧：后端 90 秒没见到轮询会自己取消。草稿类任务照旧留在后台。 */
+  function cancelTestJobsOnLeave() {
+    var pending = readPendingJobs();
+    for (var i = 0; i < pending.length; i++) {
+      var action = str(pending[i].action);
+      if (action !== "test" && action !== "try_costume") continue;
+      try {
+        if (view && typeof view.apiPost === "function") {
+          view.apiPost(ENDPOINT, { action: "cancel_job", job_id: pending[i].job_id });
+        }
+      } catch (ignored) { /* 页面正在关闭，靠后端兜底取消 */ }
+    }
+  }
+
+  /* 页面重新打开后接管没跑完的任务：继续轮询，成功后照常提示并刷新数据。 */  async function resumePendingJobs() {
     var pending = readPendingJobs();
     if (!pending.length) return;
     for (var i = 0; i < pending.length; i++) {
@@ -1490,8 +1634,9 @@
         }).catch(function (err) {
           forgetPendingJob(entry.job_id);
           var message = normalizeError(err);
-          /* 任务过早过期/后端重启时只是找不到，不必报错吓人 */
+          /* 任务过早过期/后端重启时只是找不到，不必报错吓人；退出工作台自动取消的任务也静默 */
           if (/not found|不存在|404/i.test(message)) return;
+          if (/已取消|任务已取消/.test(message)) return;
           toast("后台任务「" + label + "」失败：" + message, "err", 12000);
         });
       })(pending[i]);
@@ -1556,10 +1701,12 @@
     var first = await api(Object.assign({ action: action }, payload || {}));
     var jobId = first && first.job_id !== undefined && first.job_id !== null ? String(first.job_id) : "";
     if (!jobId) return first;
+    if (action === "test") state.testJobId = jobId;
     rememberPendingJob(jobId, action);
     try {
       return await pollJob(jobId, onProgress);
     } finally {
+      if (action === "test" && state.testJobId === jobId) state.testJobId = "";
       forgetPendingJob(jobId);
     }
   }
@@ -2638,13 +2785,6 @@
     state.revision = isFinite(revision) ? revision : 0;
     state.materials = normalizeMaterials(data.materials);
     state.materialRevisions = normalizeMaterialRevisions(data.materials);
-    state.classicCostumes = (Array.isArray(data.classic_costumes) ? data.classic_costumes : [])
-      .filter(function (item) { return item && typeof item === "object"; })
-      .map(function (item) {
-        return { id: Number(item.id), name: str(item.name),
-          hat_off: !!item.hat_off, coat_off: !!item.coat_off };
-      })
-      .filter(function (item) { return isFinite(item.id) && item.id < 0; });
     state.cities = normalizeCities(data.cities);
     if (!state.settingsDirty || options.forceSettings) {
       state.settings = (data.settings && typeof data.settings === "object") ? clone(data.settings) : {};
@@ -2664,6 +2804,7 @@
     state.overnightScenes = (Array.isArray(data.overnight_scenes) ? data.overnight_scenes : [])
       .filter(function (room) { return room && str(room.id).trim() && str(room.name).trim() && str(room.desc).trim(); })
       .map(function (room) { return { id: str(room.id), name: str(room.name), desc: str(room.desc), sleep: str(room.sleep) }; });
+    state.referenceLibrary = normalizeReferenceLibrary(data.reference_library);
     state.loaded = true;
     setConn("ok");
     clearFatal();
@@ -2696,6 +2837,7 @@
     renderEventHistory();
     renderCitiesDatalist();
     renderAlbum();
+    renderRefPanel();
     if (!state.album.loaded && !state.album.loading) loadAlbum({});
   }
 
@@ -2715,16 +2857,6 @@
   function fillMaterialSelect(select, items, kind, preserve) {
     var previous = preserve ? select.value : "";
     clear(select);
-    /* 日常服装最前面是经典四档（经典 / 脱帽经典 / 脱外套经典 / 无帽无外套经典）：
-       值为负数，后端按固定表解析成「不换装、按档位去掉帽子或外套」。 */
-    if (kind === "costume") {
-      (state.classicCostumes || []).forEach(function (item) {
-        var option = document.createElement("option");
-        option.value = str(item.id);
-        option.textContent = "经典：" + str(item.name) + "（不换装）";
-        select.appendChild(option);
-      });
-    }
     (items || []).forEach(function (entry) {
       var option = document.createElement("option");
       option.value = str(entry.id);
@@ -3530,6 +3662,10 @@
       fillMaterialSelect(costumeSelect, state.materials.costume, "costume", preserve);
       state.testEventOutfits = [];
       state.testEventCostume = null;
+    } else if (state.testCostumeSource === "ref") {
+      fillRefOutfitSelect(costumeSelect, preserve);
+      state.testEventOutfits = [];
+      state.testEventCostume = null;
     } else {
       var outfits = event ? eventOutfitsForTest(event) : [];
       state.testEventOutfits = outfits;
@@ -3552,8 +3688,10 @@
         : state.testActionSource === "sleep"
           ? "睡觉来源下这里列 00:30 之后的三种过夜拍法，生成时会带「关灯、只有屏幕冷光」的要求。"
           : state.testActionSource === "selfie"
-            ? "自拍来源下这里列的是自拍动作（表情 + 手势），生成时会用前置摄像头自拍的构图，画面里不会出现手机。"
-            : "";
+            ? "自拍来源下这里列的是自拍动作（表情 + 手势），生成时会用前置摄像头自拍的构图，照片里不会出现手机。"
+            : state.testActionSource === "interaction"
+              ? "互动来源下这里列的是互动库里的提示词，按行首动作词（摸摸 / 捏捏 / 戳戳…）走互动特写构图，照片里会有一只镜头外伸进来的手。"
+              : "";
     }
     if (state.testActionSource === "meal") {
       fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
@@ -3565,6 +3703,9 @@
       state.testEventActions = [];
     } else if (state.testActionSource === "selfie") {
       fillMaterialSelect(closeupSelect, state.materials.selfie || [], "selfie", preserve);
+      state.testEventActions = [];
+    } else if (state.testActionSource === "interaction") {
+      fillMaterialSelect(closeupSelect, state.materials.interaction || [], "interaction", preserve);
       state.testEventActions = [];
     } else if (state.testActionSource === "daily") {
       fillMaterialSelect(closeupSelect, state.materials.closeup, "closeup", preserve);
@@ -3606,9 +3747,16 @@
     if ((state.testCostumeSource === "event" || state.testActionSource === "event") && !testEvent()) {
       reasons.push("来源选了事件素材：需要先选一个事件");
     }
+    var costumeNode = $("#t-costume");
     if (state.testCostumeSource === "daily") {
-      if (!state.materials.costume.length && !(state.classicCostumes || []).length) reasons.push("素材库没有服装（costume）");
-      else if (!$("#t-costume") || $("#t-costume").value === "") reasons.push("还没有选择日常服装");
+      if (!state.materials.costume.length) reasons.push("素材库没有服装（costume）");
+      else if (!costumeNode || str(costumeNode.value) === "") reasons.push("还没有选择日常服装");
+    } else if (state.testCostumeSource === "ref") {
+      if (!refOutfitOptions().length) {
+        reasons.push("参考图页还没有起名字的衣服（去参考图页点「衣服设置」起个名字）");
+      } else if (!costumeNode || str(costumeNode.value) === "") {
+        reasons.push("还没有选择参考图衣服");
+      }
     } else if (!state.testEventCostume) {
       reasons.push("该事件没有可用的事件服装（先在事件里写服装或设置事件服装随机池）");
     } else if (!str(state.testEventCostume.desc).trim()) {
@@ -3623,6 +3771,9 @@
     } else if (state.testActionSource === "selfie") {
       if (!(state.materials.selfie || []).length) reasons.push("素材库没有自拍动作（selfie）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择自拍动作");
+    } else if (state.testActionSource === "interaction") {
+      if (!(state.materials.interaction || []).length) reasons.push("素材库没有互动提示词（interaction）");
+      else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择互动提示词");
     } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
@@ -3724,7 +3875,10 @@
     lines.push("城市：" + str(payload.city) + " / " + str(payload.district));
     lines.push(payload.costume_source === "event"
       ? "服装：事件「" + str(payload.event_name || payload.event_id) + "」/ " + str(payload.costume_name)
-      : "服装：日常 #" + str(payload.costume_id));
+      : payload.costume_source === "ref"
+        ? "服装：参考图「" + str(payload.costume_name) + "」（不换装）"
+        : "服装：日常" + (payload.costume_name ? "「" + str(payload.costume_name) + "」" : " #" + str(payload.costume_id)));
+    if (payload.bare_face) lines.push("脸部：素颜参考图");
     var actionName = payload.action_source === "event" ? testEventActionName(payload.event_action) : "";
     if (payload.action_source === "meal") {
       var mealSetup = MEAL_SETUP_OPTIONS[payload.meal_setup];
@@ -3735,6 +3889,13 @@
         return item.value === str(payload.sleep_kind);
       })[0] || SLEEP_KIND_OPTIONS[0];
       lines.push("动作：睡觉 / " + sleepKind.label);
+    } else if (payload.action_source === "selfie") {
+      var selfieRow = (state.materials.selfie || []).filter(function (row) {
+        return Number(row.id) === Number(payload.selfie_id);
+      })[0];
+      lines.push("动作：自拍「" + (selfieRow ? materialLabel("selfie", selfieRow) : ("#" + str(payload.selfie_id))) + "」");
+    } else if (payload.action_source === "interaction") {
+      lines.push("动作：互动「" + str(payload.interaction_action) + " #" + str(payload.interaction_id) + "」");
     } else {
       lines.push(payload.action_source === "event"
         ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
@@ -3997,6 +4158,7 @@
         : selection.kind === "overnight" ? str(selection.place) : location.place,
       costume_source: state.testCostumeSource,
       action_source: state.testActionSource,
+      bare_face: !!(($("#t-bare-face") || {}).checked),
       confirm_paid: true
     };
     if (sceneMode === "event") {
@@ -4017,12 +4179,19 @@
       var costumeId = selectedMaterialId($("#t-costume"));
       if (costumeId === null) { toast("请选择日常服装", "err"); return; }
       payload.costume_id = costumeId;
-      var classicPick = (state.classicCostumes || []).filter(function (item) {
-        return Number(item.id) === costumeId;
-      })[0];
-      costumeLine = classicPick
-        ? "服装：经典档位「" + str(classicPick.name) + "」（不换装，穿参考图那套）"
-        : "服装：日常 #" + costumeId;
+      costumeLine = "服装：日常 #" + costumeId;
+    } else if (state.testCostumeSource === "ref") {
+      var refCostumeNode = $("#t-costume");
+      var refCostumeRaw = refCostumeNode ? str(refCostumeNode.value) : "";
+      var refPick = /^ref:([0-9a-f]{8,32}):([01])([01])$/.exec(refCostumeRaw);
+      if (!refPick) { toast("请选择参考图衣服", "err"); return; }
+      /* 参考图衣服档位：不发 costume_id，改成 ref_outfit，后端直接用这张图那套衣服 */
+      payload.ref_outfit = { image_id: refPick[1], hat_off: refPick[2] === "1", coat_off: refPick[3] === "1" };
+      var pickedOutfit = refOutfitImages().filter(function (item) { return str(item.id) === refPick[1]; })[0];
+      var pickedName = pickedOutfit ? str(pickedOutfit.costume) : "参考图衣服";
+      payload.costume_name = pickedName;
+      costumeLine = "服装：参考图「" + pickedName + "」（不换装）"
+        + (refPick[2] === "1" ? " / 摘帽子" : "") + (refPick[3] === "1" ? " / 脱外套" : "");
     } else {
       var costume = state.testEventCostume;
       if (!costume) { toast("该事件没有可用的事件服装", "err"); return; }
@@ -4067,6 +4236,16 @@
         return Number(row.id) === selfieId;
       })[0];
       actionLine = "动作：自拍「" + (selfieEntry ? materialLabel("selfie", selfieEntry) : ("#" + selfieId)) + "」";
+    } else if (state.testActionSource === "interaction") {
+      var interactionId = selectedMaterialId($("#t-closeup"));
+      if (interactionId === null) { toast("请选择互动提示词", "err"); return; }
+      payload.interaction_id = interactionId;
+      var interactionEntry = (state.materials.interaction || []).filter(function (row) {
+        return Number(row.id) === interactionId;
+      })[0];
+      var interactionAction = str(interactionEntry && interactionEntry.action);
+      payload.interaction_action = interactionAction;
+      actionLine = "动作：互动「" + (interactionAction || "?") + " #" + interactionId + "」";
     } else {
       var actionText = testActionValue();
       if (!actionText) { toast("事件动作不能为空", "err"); return; }
@@ -4083,6 +4262,7 @@
     var confirmBody = "这次会用生图接口生成 1 张测试图，可能产生实际费用。\n\n" +
       sceneLine + "\n城市：" + str(payload.city) + " / " + str(payload.district) +
       "\n" + costumeLine + "\n" + actionLine +
+      (payload.bare_face ? "\n脸部：素颜三视图（卸妆脸参考图）" : "") +
       (sceneText ? "\n场景描述：" + sceneText.length + " 字" : "");
     var confirmed = await openModal({
       title: "确认生成",
@@ -4093,6 +4273,10 @@
     if (!confirmed) return;
 
     try {
+      state.testJobId = "";
+      state.testCancelled = false;
+      var cancelBtn = $("#t-cancel");
+      if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
       await exclusive("job", btn, async function () {
         setStatus($("#t-status"), "提交中…", "run");
         try {
@@ -4107,13 +4291,36 @@
           toast("生成成功", "ok");
           if (state.album.loaded) loadAlbum({ page: 0 });
         } catch (err) {
+          if (state.testCancelled) {
+            setStatus($("#t-status"), "已取消这次生图", "warn");
+            return;
+          }
           var message = normalizeError(err);
           setStatus($("#t-status"), "失败：" + message, "err");
           toast("生成失败：" + message + conflictHint(message), "err");
         }
       });
     } finally {
+      state.testJobId = "";
+      var hideCancel = $("#t-cancel");
+      if (hideCancel) { hideCancel.hidden = true; hideCancel.disabled = false; }
       refreshTestAvailability();
+    }
+  }
+
+  /* 生图过程中点「取消生图」：先让前端轮询退出，再让后端取消这次付费任务 */
+  async function cancelTestJob(btn) {
+    var jobId = state.testJobId;
+    if (!jobId) { toast("现在没有正在跑的这次生图", "warn"); return; }
+    state.testCancelled = true;
+    state.activeJobs[jobId] = false;
+    if (btn) btn.disabled = true;
+    setStatus($("#t-status"), "正在取消…", "run");
+    try {
+      await api({ action: "cancel_job", job_id: jobId });
+      setStatus($("#t-status"), "已取消这次生图", "warn");
+    } catch (err) {
+      setStatus($("#t-status"), "取消请求失败：" + normalizeError(err), "err");
     }
   }
 
@@ -4202,9 +4409,9 @@
   var MATERIAL_EDIT_HINT = {
     costume: "格式：名称 | 别名1,别名2 | 服装描述（别名可为空，但竖线要保留两处）",
     closeup: "一行一条特写提示词；编号保持不变，其它条目编号也不受影响。",
-    interaction: "一行一条互动提示词；一般以「摸摸」「捏捏」开头。",
+    interaction: "一行一条互动提示词，开头固定为「动作词：【机位短语】；正文」（动作词如摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍）；正文只写一张照片里定格的那一刻，不要写连续动作。",
     meal: "一行一条菜品：「菜名 | 描述」，描述约100字，写清菜、主食和餐具。",
-    selfie: "一行一条自拍动作：「名字 | 表情 | 手势」；前置摄像头自拍，画面里不出现手机，手势只用没拿手机的那只手。"
+    selfie: "一行一条自拍动作：「名字 | 表情 | 手势」；前置摄像头自拍，照片里不出现手机，手势只用没拿手机的那只手。"
   };
 
   function applyMaterialWriteResult(kind, result) {
@@ -4432,7 +4639,9 @@
     if (lines.length !== 1) return "草稿必须只有一行";
     var line = lines[0].trim();
     if (kind === "costume" && line.split("|").length !== 3) return "服装草稿必须是「名称 | 别名 | 描述」三段";
-    if (kind === "interaction" && !/^(摸摸|捏捏)[：:｜| ]/.test(line)) return "互动草稿必须以「摸摸：」或「捏捏：」开头";
+    if (kind === "interaction" && !/^[\u4e00-\u9fff]{1,3}\s*[：:]\s*【[^】]+】\s*[；;]/.test(line)) {
+      return "互动草稿必须以「动作词：【机位短语】；正文」开头（例如「捏捏：【仰脸俯拍＋双手互动】；…」）";
+    }
     return "";
   }
 
@@ -6504,7 +6713,7 @@
 
   /* ---------------- 标签页与静态事件 ---------------- */
 
-  var TAB_NAMES = ["test", "material", "world", "events", "schedule"];
+  var TAB_NAMES = ["refs", "test", "material", "world", "events", "schedule"];
 
   function scheduleTime(value) {
     var match=str(value).match(/(?:T|\s)(\d{2}:\d{2})/);return match?match[1]:str(value);
@@ -6528,6 +6737,1327 @@
     try{var data=await api({action:"schedule"});renderSchedule(data);setStatus($("#schedule-status"),str(data.date)+" · 更新于 "+scheduleTime(data.now),"ok");}
     catch(error){setStatus($("#schedule-status"),"读取失败："+normalizeError(error),"err");}
     finally{button.disabled=false;}
+  }
+
+  /* ---------------- 参考图（上传 / 裁剪 / 槽位 / 条件） ---------------- */
+
+  var REF_SLOT_LABELS = {
+    main1: "主站参考图1（全身三视图）",
+    main2: "主站参考图2（头部三视图）",
+    backup1: "副站参考图1",
+    backup2: "副站参考图2"
+  };
+  var REF_TARGET_LABELS = {
+    main1: "主站参考图1",
+    main2: "主站参考图2",
+    backup1: "副站参考图1",
+    backup2: "副站参考图2"
+  };
+  var REF_TYPES = [
+    { type: "date", label: "指定日期范围" },
+    { type: "temp", label: "当日平均气温" },
+    { type: "probability", label: "每天概率" }
+  ];
+  var REF_THUMB_CACHE = {};   /* 参考图 id → 缩略图 dataURL，避免每次渲染都请求 */
+  var refFilePending = null;  /* 点「上传/更换」时记住这次选文件是给哪个槽位的 */
+
+  function defaultRefSlots() {
+    return [
+      { slot: "main1", label: REF_SLOT_LABELS.main1 },
+      { slot: "main2", label: REF_SLOT_LABELS.main2 },
+      { slot: "backup1", label: REF_SLOT_LABELS.backup1 },
+      { slot: "backup2", label: REF_SLOT_LABELS.backup2 }
+    ];
+  }
+
+  function defaultRefTargets(group) {
+    var slots = group === "backup" ? ["backup1", "backup2"] : ["main1", "main2"];
+    return slots.map(function (slot, index) {
+      return { index: index + 1, slot: slot, label: REF_TARGET_LABELS[slot] };
+    });
+  }
+
+  function normalizeRefTargets(raw, group) {
+    var list = raw && typeof raw === "object" && Array.isArray(raw[group]) ? raw[group] : [];
+    var out = list.filter(function (item) {
+      return item && typeof item === "object" && str(item.slot);
+    }).map(function (item, index) {
+      var slot = str(item.slot);
+      return {
+        index: Number(item.index) || index + 1,
+        slot: slot,
+        label: str(item.label) || str(REF_TARGET_LABELS[slot]) || slot
+      };
+    });
+    return out.length ? out : defaultRefTargets(group);
+  }
+
+  function normalizeRefCondition(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    var type = str(raw.type);
+    if (type !== "date" && type !== "temp" && type !== "probability") type = "temp";
+    var images = {};
+    var rawImages = raw.images && typeof raw.images === "object" && !Array.isArray(raw.images)
+      ? raw.images : null;
+    if (rawImages) {
+      ["main1", "main2", "backup1", "backup2"].forEach(function (slot) {
+        var id = str(rawImages[slot]);
+        if (id) images[slot] = id;
+      });
+    } else {
+      /* 旧格式兜底：image_id / image_id2 / targets → 每个位置一张图 */
+      var legacyImage = str(raw.image_id);
+      var legacySecond = str(raw.image_id2);
+      (Array.isArray(raw.targets) ? raw.targets : []).forEach(function (slot) {
+        slot = str(slot);
+        var id = (slot === "main2" || slot === "backup2")
+          ? (legacySecond || legacyImage) : legacyImage;
+        if (id) images[slot] = id;
+      });
+    }
+    var value = Number(raw.value);
+    var percent = Number(raw.percent);
+    /* 日期条件：开始日期必填，结束日期留空＝只生效那一天；年份留空＝每年都有 */
+    function yearOf(input) {
+      if (input === undefined || input === null || input === "") return null;
+      var number = Number(input);
+      return isFinite(number) && number > 0 ? number : null;
+    }
+    function monthOf(input, fallback) {
+      var number = Number(input);
+      return isFinite(number) && number >= 1 && number <= 12 ? number : fallback;
+    }
+    function dayOf(input, fallback) {
+      var number = Number(input);
+      return isFinite(number) && number >= 1 && number <= 31 ? number : fallback;
+    }
+    var startMonth = monthOf(raw.start_month, monthOf(raw.month, 1));
+    var startDay = dayOf(raw.start_day, dayOf(raw.day, 1));
+    var hasEnd = (raw.end_month !== undefined && raw.end_month !== null && raw.end_month !== "")
+      || (raw.end_day !== undefined && raw.end_day !== null && raw.end_day !== "");
+    return {
+      id: str(raw.id),
+      label: str(raw.label),
+      images: images,
+      type: type,
+      enabled: raw.enabled !== false,
+      op: str(raw.op) === "gt" ? "gt" : "lt",
+      value: isFinite(value) ? value : 10,
+      percent: isFinite(percent) ? percent : 30,
+      start_year: yearOf(raw.start_year),
+      start_month: startMonth,
+      start_day: startDay,
+      end_year: hasEnd ? yearOf(raw.end_year) : null,
+      end_month: hasEnd ? monthOf(raw.end_month, startMonth) : null,
+      end_day: hasEnd ? dayOf(raw.end_day, startDay) : null
+    };
+  }
+
+  function normalizeRefBuiltin(raw) {
+    raw = raw && typeof raw === "object" ? raw : {};
+    return {
+      available: !!raw.available,
+      style: str(raw.style),
+      summary: str(raw.summary)
+    };
+  }
+
+  function normalizeReferenceLibrary(raw) {
+    raw = raw && typeof raw === "object" ? raw : {};
+    var images = (Array.isArray(raw.images) ? raw.images : []).filter(function (item) {
+      return item && typeof item === "object" && str(item.id);
+    }).map(function (item) {
+      return {
+        id: str(item.id),
+        label: str(item.label) || str(item.id),
+        role: str(item.role) || "extra",
+        width: Number(item.width) || 0,
+        height: Number(item.height) || 0,
+        created_at: item.created_at === undefined || item.created_at === null ? 0 : item.created_at,
+        costume: str(item.costume),
+        hat: !!item.hat,
+        outer: !!item.outer,
+        single_ref: !!item.single_ref
+      };
+    });
+    var mainRaw = raw.main && typeof raw.main === "object" ? raw.main : {};
+    var backupRaw = raw.backup && typeof raw.backup === "object" ? raw.backup : {};
+    var conditions = (Array.isArray(raw.conditions) ? raw.conditions : [])
+      .map(normalizeRefCondition)
+      .filter(Boolean);
+    var slots = (Array.isArray(raw.slots) ? raw.slots : []).filter(function (item) {
+      return item && typeof item === "object" && str(item.slot);
+    }).map(function (item) {
+      var slot = str(item.slot);
+      return { slot: slot, label: str(item.label) || str(REF_SLOT_LABELS[slot]) || slot };
+    });
+    if (!slots.length) slots = defaultRefSlots();
+    var types = (Array.isArray(raw.types) ? raw.types : []).filter(function (item) {
+      return item && typeof item === "object" && str(item.type);
+    }).map(function (item) {
+      return { type: str(item.type), label: str(item.label) || str(item.type) };
+    });
+    if (!types.length) types = REF_TYPES.slice();
+    return {
+      images: images,
+      main: {
+        dual: mainRaw.dual === undefined || mainRaw.dual === null ? true : !!mainRaw.dual,
+        body: str(mainRaw.body),
+        head: str(mainRaw.head)
+      },
+      backup: {
+        enabled: !!backupRaw.enabled,
+        single: backupRaw.single === undefined || backupRaw.single === null ? true : !!backupRaw.single,
+        image: str(backupRaw.image),
+        image2: str(backupRaw.image2)
+      },
+      conditions: conditions,
+      slots: slots,
+      targets: {
+        main: normalizeRefTargets(raw.targets, "main"),
+        backup: normalizeRefTargets(raw.targets, "backup")
+      },
+      types: types,
+      priority: str(raw.priority) || "日期 > 气温 > 概率 > 默认参考图",
+      builtin: normalizeRefBuiltin(raw.builtin)
+    };
+  }
+
+  /* 拿写入结果里的 snapshot：save_ref_slots / save_ref_conditions 直接返回 snapshot */
+  function applyRefLibrary(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    state.referenceLibrary = normalizeReferenceLibrary(snapshot);
+    renderRefPanel();
+    /* 图片墙里刚改完衣服名字 / 号码时，测试面板的「参考图衣服」下拉要立刻同步 */
+    if (state.loaded && state.materials && Array.isArray(state.materials.costume)) {
+      renderTestMaterialSources(true);
+      refreshTestAvailability();
+    }
+  }
+
+  /* 参考图里起了衣服名字的图：生图测试的「参考图衣服」按这套衣服出档位；
+     标了「只做单图参考」的图不算衣服，不在这里出现 */
+  function refOutfitImages() {
+    var lib = state.referenceLibrary;
+    var images = lib && Array.isArray(lib.images) ? lib.images : [];
+    return images.filter(function (item) { return str(item.costume) && !item.single_ref; });
+  }
+
+  /* 每套衣服 1 档，勾了可摘帽 +1 档，勾了可脱外套 +1 档，两个都勾再 +1 档；
+     值是 ref:<image_id>:<h><o>，h / o 各是 0 或 1，后端按这个格式解析 */
+  function refOutfitOptions() {
+    var out = [];
+    refOutfitImages().forEach(function (item) {
+      var name = str(item.costume);
+      var hat = !!item.hat;
+      var outer = !!item.outer;
+      out.push({ value: "ref:" + item.id + ":00", label: name + "（不换装）" });
+      if (hat) out.push({ value: "ref:" + item.id + ":10", label: "脱帽" + name + "（不换装）" });
+      if (outer) out.push({ value: "ref:" + item.id + ":01", label: "脱外套" + name + "（不换装）" });
+      if (hat && outer) out.push({ value: "ref:" + item.id + ":11", label: "无帽无外套" + name + "（不换装）" });
+    });
+    return out;
+  }
+
+  /* 参考图衣服来源的下拉：选项全部动态取自参考图页，改名 / 改帽外套勾选后重渲染即同步 */
+  function fillRefOutfitSelect(select, preserve) {
+    if (!select) return;
+    var previous = preserve ? str(select.value) : "";
+    clear(select);
+    var options = refOutfitOptions();
+    options.forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    });
+    if (!options.length) {
+      var emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "（参考图页还没有起名字的衣服）";
+      select.appendChild(emptyOption);
+      select.value = "";
+      select.disabled = true;
+      return;
+    }
+    select.disabled = false;
+    var values = options.map(function (item) { return item.value; });
+    select.value = previous && values.indexOf(previous) !== -1 ? previous : values[0];
+  }
+
+  /* 参考图页当前是否已经接管出图：有槽位图或条件参考图就算接管 */
+  function refLibraryConfigured() {
+    var lib = state.referenceLibrary;
+    if (!lib) return false;
+    if (str(lib.main.body) || str(lib.main.head)) return true;
+    if (str(lib.backup.image) || str(lib.backup.image2)) return true;
+    return Array.isArray(lib.conditions) && lib.conditions.length > 0;
+  }
+
+  function refTakeoverLabel() {
+    var lib = state.referenceLibrary;
+    var parts = [];
+    if (!lib) return "还没配任何槽位";
+    if (str(lib.main.body)) parts.push("主站参考图1");
+    if (str(lib.main.head)) parts.push("主站参考图2");
+    if (str(lib.backup.image)) parts.push("副站参考图1");
+    if (str(lib.backup.image2)) parts.push("副站参考图2");
+    var conds = Array.isArray(lib.conditions) ? lib.conditions : [];
+    if (conds.length) parts.push("条件参考图 " + conds.length + " 条");
+    return parts.length ? parts.join("、") : "还没配任何槽位";
+  }
+
+  function renderRefTakeover() {
+    var tag = $("#ref-state-tag");
+    var text = $("#ref-state-text");
+    var btn = $("#ref-adopt");
+    if (!tag || !text || !btn) return;
+    var lib = state.referenceLibrary;
+    var builtin = lib && lib.builtin ? lib.builtin : normalizeRefBuiltin(null);
+    var summary = builtin.summary || "插件内置参考图";
+    var live = refLibraryConfigured();
+    tag.textContent = live ? "已接管" : "未接管";
+    if (live) {
+      text.textContent = "出图用的就是下面槽位里的图：" + refTakeoverLabel() + "；想改回插件内置参考图，点右边的按钮覆盖";
+    } else if (builtin.available) {
+      text.textContent = "这一页还是空的，也就是没接管出图：现在生图照旧用插件内置参考图（" + summary + "），不填也完全不会影响生图；想换自己的图就在下面上传，想先把内置图填进来看看就点右边的按钮";
+    } else {
+      text.textContent = "这一页还是空的，也就是没接管出图：现在生图照旧用插件内置参考图，不填也完全不会影响生图；这个版本没有可以一键填入的内置图，直接在下面上传就行";
+    }
+    btn.textContent = live ? "用内置参考图覆盖" : "填入内置参考图";
+    btn.hidden = !builtin.available;
+  }
+
+  async function handleAdoptBuiltin(btn) {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    var builtin = lib.builtin ? lib.builtin : normalizeRefBuiltin(null);
+    var summary = builtin.summary || "插件内置参考图";
+    if (refLibraryConfigured()) {
+      var confirmed = await openModal({
+        title: "用内置参考图覆盖",
+        body: "会把主站/副站的槽位换成插件内置参考图（" + summary + "）；已经上传的图片不会删除，条件参考图也不会动",
+        okText: "覆盖",
+        cancelText: "算了"
+      });
+      if (!confirmed) return;
+    }
+    await exclusive("refs", btn, async function () {
+      setStatus($("#ref-adopt-status"), "写入中…", "run");
+      try {
+        var snapshot = await api({ action: "adopt_builtin_refs" });
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-adopt-status"), "已填入内置参考图", "ok");
+        toast("已填入内置参考图", "ok");
+      } catch (err) {
+        setStatus($("#ref-adopt-status"), "填入失败：" + normalizeError(err), "err");
+      }
+    });
+  }
+
+  function refSlotImageId(group, slot) {
+    var lib = state.referenceLibrary;
+    if (!lib) return "";
+    if (group === "main") return slot === "main2" ? str(lib.main.head) : str(lib.main.body);
+    return slot === "backup2" ? str(lib.backup.image2) : str(lib.backup.image);
+  }
+
+  function refSlotLabel(slot) {
+    var lib = state.referenceLibrary;
+    var list = lib && Array.isArray(lib.slots) ? lib.slots : [];
+    for (var i = 0; i < list.length; i++) {
+      if (str(list[i].slot) === slot) return str(list[i].label) || slot;
+    }
+    return str(REF_SLOT_LABELS[slot]) || slot;
+  }
+
+  function refTargetGroups(lib) {
+    var out = [];
+    if (!lib || !lib.targets || typeof lib.targets !== "object") return out;
+    ["main", "backup"].forEach(function (group) {
+      var list = Array.isArray(lib.targets[group]) ? lib.targets[group] : [];
+      list.forEach(function (item) { if (item && str(item.slot)) out.push(item); });
+    });
+    return out;
+  }
+
+  function refTargetShortLabel(slot) {
+    var lib = state.referenceLibrary;
+    var list = refTargetGroups(lib);
+    for (var i = 0; i < list.length; i++) {
+      if (str(list[i].slot) === slot) return str(list[i].label) || slot;
+    }
+    return str(REF_TARGET_LABELS[slot]) || slot;
+  }
+
+  function nextRefImageLabel() {
+    var lib = state.referenceLibrary;
+    var count = lib && Array.isArray(lib.images) ? lib.images.length : 0;
+    return "参考图 " + (count + 1);
+  }
+
+  /* ---------- 缩略图：按需请求并缓存 ---------- */
+
+  function refThumbInto(id, img) {
+    if (!img) return;
+    var cached = REF_THUMB_CACHE[id];
+    if (cached) { img.src = cached; return; }
+    api({ action: "ref_image", id: id, thumb: true }).then(function (data) {
+      var src = extractImage(data);
+      if (!isImageDataUrl(src)) throw new Error("缩略图不是图片数据");
+      REF_THUMB_CACHE[id] = src;
+      img.src = src;
+    }).catch(function () {
+      img.classList.add("is-fail");
+      img.alt = "缩略图读取失败";
+      img.title = "缩略图读取失败；点开看原图";
+    });
+  }
+
+  function openRefFullImage(id) {
+    api({ action: "ref_image", id: id, thumb: false }).then(function (data) {
+      var src = extractImage(data);
+      if (!isImageDataUrl(src)) { toast("原图读取失败", "err"); return; }
+      openImageModal(src, "参考图原图");
+    }).catch(function (err) {
+      toast("原图读取失败：" + normalizeError(err), "err");
+    });
+  }
+
+  /* ---------- 裁剪编辑器 ---------- */
+
+  function refCropCanvas(img, box, display) {
+    var naturalW = img.naturalWidth || img.width;
+    var naturalH = img.naturalHeight || img.height;
+    if (!naturalW || !naturalH) throw new Error("图片尺寸不可用");
+    var scaleX = naturalW / Math.max(1, display.w);
+    var scaleY = naturalH / Math.max(1, display.h);
+    var sx = clampInt(Math.floor(box.x * scaleX), 0, Math.max(0, naturalW - 1), 0);
+    var sy = clampInt(Math.floor(box.y * scaleY), 0, Math.max(0, naturalH - 1), 0);
+    var sw = clampInt(Math.round(box.w * scaleX), 1, Math.max(1, naturalW - sx), naturalW - sx);
+    var sh = clampInt(Math.round(box.h * scaleY), 1, Math.max(1, naturalH - sy), naturalH - sy);
+    var edge = Math.max(sw, sh);
+    var shrink = 1536 / edge;
+    var scale = edge > 1536 ? shrink : 1;
+    var canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
+    var ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("无法处理图片");
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  }
+
+  function openRefCropModal(src) {
+    return new Promise(function (resolve) {
+      var MIN_SIZE = 40;
+      var wrap = el("div", "ref-crop-wrap");
+      var stage = el("div", "ref-crop-stage");
+      var img = document.createElement("img");
+      img.className = "ref-crop-img";
+      img.alt = "待裁剪的参考图";
+      img.draggable = false;
+      stage.appendChild(img);
+      var sel = el("div", "ref-crop-sel");
+      var handle = el("div", "ref-crop-handle");
+      handle.title = "拖动调整选框大小";
+      sel.appendChild(handle);
+      stage.appendChild(sel);
+      wrap.appendChild(stage);
+      var tools = el("div", "row-actions");
+      tools.style.marginTop = "4px";
+      var fullBtn = el("button", "btn btn-ghost btn-mini", "全图");
+      fullBtn.type = "button";
+      tools.appendChild(fullBtn);
+      wrap.appendChild(tools);
+      wrap.appendChild(el("div", "ref-crop-hint", "在图上拖动可以重新框选；拖动选框内部移动；拖右下角把手调整大小；不裁剪就直接点「确认裁剪」"));
+
+      var display = { w: 0, h: 0 };
+      var box = { x: 0, y: 0, w: 0, h: 0 };
+      var ready = false;
+      var touched = false;
+      var drag = null;
+
+      function measure() {
+        var rect = stage.getBoundingClientRect();
+        display.w = Math.max(1, rect.width);
+        display.h = Math.max(1, rect.height);
+      }
+      function applyBox() {
+        sel.style.left = Math.round(box.x) + "px";
+        sel.style.top = Math.round(box.y) + "px";
+        sel.style.width = Math.max(1, Math.round(box.w)) + "px";
+        sel.style.height = Math.max(1, Math.round(box.h)) + "px";
+      }
+      function resetBoxDefault() {
+        box.w = Math.max(MIN_SIZE, display.w * 0.9);
+        box.h = Math.max(MIN_SIZE, display.h * 0.9);
+        box.x = (display.w - box.w) / 2;
+        box.y = (display.h - box.h) / 2;
+        applyBox();
+      }
+      function resetBoxFull() {
+        box.x = 0;
+        box.y = 0;
+        box.w = display.w;
+        box.h = display.h;
+        applyBox();
+      }
+      function point(e) {
+        var rect = stage.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      }
+      function onImgLoad() {
+        ready = true;
+        measure();
+        resetBoxDefault();
+        /* 图片刚解码时布局可能还没稳定：下一帧再量一次（用户已经动手就不动选框） */
+        setTimeout(function () {
+          if (!ready || touched) return;
+          measure();
+          resetBoxDefault();
+        }, 30);
+      }
+      function onMove(e) {
+        if (!drag) return;
+        e.preventDefault();
+        var p = point(e);
+        var dx = p.x - drag.p.x;
+        var dy = p.y - drag.p.y;
+        if (drag.mode === "draw") {
+          box.x = Math.min(drag.p.x, p.x);
+          box.y = Math.min(drag.p.y, p.y);
+          box.w = Math.abs(p.x - drag.p.x);
+          box.h = Math.abs(p.y - drag.p.y);
+        } else if (drag.mode === "move") {
+          box.w = drag.box.w;
+          box.h = drag.box.h;
+          box.x = Math.max(0, Math.min(display.w - box.w, drag.box.x + dx));
+          box.y = Math.max(0, Math.min(display.h - box.h, drag.box.y + dy));
+        } else {
+          box.w = Math.max(MIN_SIZE, Math.min(display.w - box.x, drag.box.w + dx));
+          box.h = Math.max(MIN_SIZE, Math.min(display.h - box.y, drag.box.h + dy));
+        }
+        applyBox();
+      }
+      function onUp() {
+        if (!drag) return;
+        var mode = drag.mode;
+        drag = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (mode === "draw" && (box.w < MIN_SIZE || box.h < MIN_SIZE)) {
+          resetBoxDefault();
+          return;
+        }
+        box.w = Math.min(box.w, display.w);
+        box.h = Math.min(box.h, display.h);
+        box.x = Math.max(0, Math.min(box.x, display.w - box.w));
+        box.y = Math.max(0, Math.min(box.y, display.h - box.h));
+        applyBox();
+      }
+      function onResize() {
+        if (!ready) return;
+        var prevW = display.w;
+        var prevH = display.h;
+        measure();
+        if (!prevW || !prevH) return;
+        box.x = box.x * (display.w / prevW);
+        box.y = box.y * (display.h / prevH);
+        box.w = box.w * (display.w / prevW);
+        box.h = box.h * (display.h / prevH);
+        applyBox();
+      }
+
+      stage.addEventListener("mousedown", function (e) {
+        if (!ready || (e.button !== undefined && e.button !== 0)) return;
+        e.preventDefault();
+        measure();
+        touched = true;
+        var p = point(e);
+        if (e.target === handle) {
+          drag = { mode: "resize", p: p, box: { x: box.x, y: box.y, w: box.w, h: box.h } };
+        } else if (e.target === sel) {
+          drag = { mode: "move", p: p, box: { x: box.x, y: box.y, w: box.w, h: box.h } };
+        } else {
+          drag = { mode: "draw", p: p, box: { x: box.x, y: box.y, w: box.w, h: box.h } };
+          box.x = p.x;
+          box.y = p.y;
+          box.w = 0;
+          box.h = 0;
+          applyBox();
+        }
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      });
+      fullBtn.addEventListener("click", function () {
+        if (!ready) return;
+        touched = true;
+        measure();
+        resetBoxFull();
+      });
+      img.addEventListener("load", onImgLoad);
+      window.addEventListener("resize", onResize);
+      var answered = openModal({
+        title: "裁剪参考图",
+        body: wrap,
+        okText: "确认裁剪",
+        cancelText: "取消"
+      });
+      img.src = src;
+      answered.then(function (ok) {
+        window.removeEventListener("resize", onResize);
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        drag = null;
+        if (!ok || !ready) { resolve(""); return; }
+        var out = "";
+        try {
+          out = refCropCanvas(img, box, display);
+        } catch (err) {
+          toast("裁剪失败：" + normalizeError(err), "err");
+        }
+        resolve(out);
+      });
+    });
+  }
+
+  /* ---------- 上传：读文件 → 裁剪 → 上传 ---------- */
+
+  function triggerRefFile(target, btn) {
+    var input = $("#ref-file");
+    if (!input) { toast("页面上找不到文件选择控件", "err"); return; }
+    refFilePending = { target: target || null, btn: btn || null };
+    input.value = "";
+    input.click();
+  }
+
+  function onRefFileChange() {
+    var input = $("#ref-file");
+    var file = input && input.files && input.files[0] ? input.files[0] : null;
+    if (input) input.value = "";
+    var pending = refFilePending;
+    refFilePending = null;
+    if (!file) return;
+    uploadRefImage(file, pending ? pending.target : null, pending ? pending.btn : null);
+  }
+
+  async function uploadRefImage(file, target, btn) {
+    if (!file) return;
+    if (!/^image\//i.test(file.type || "")) { toast("请选择图片文件", "err"); return; }
+    if (file.size > IMAGE_MAX_BYTES) { toast("图片超过 8MB，请先压缩", "err"); return; }
+    var actionBtn = btn || $("#ref-pick");
+    await exclusive("refs", actionBtn, async function () {
+      var dataUrl;
+      try {
+        dataUrl = await fileToDataUrl(file);
+      } catch (err) {
+        setStatus($("#ref-status"), "读取图片失败：" + normalizeError(err), "err");
+        return;
+      }
+      var cropped = "";
+      try {
+        cropped = await openRefCropModal(dataUrl);
+      } catch (err) {
+        toast("裁剪失败：" + normalizeError(err), "err");
+        return;
+      }
+      if (!cropped) { setStatus($("#ref-status"), "已取消上传", ""); return; }
+      var role = target && target.role ? target.role : "extra";
+      var label = target && target.slot ? refTargetShortLabel(target.slot) : nextRefImageLabel();
+      setStatus($("#ref-status"), "上传中…", "run");
+      var result;
+      try {
+        result = await api({ action: "save_ref_image", image: cropped, label: label, role: role });
+      } catch (err) {
+        setStatus($("#ref-status"), "上传失败：" + normalizeError(err), "err");
+        toast(normalizeError(err), "err");
+        return;
+      }
+      applyRefLibrary(result && result.library);
+      setStatus($("#ref-status"), "已上传「" + label + "」", "ok");
+      toast("已上传参考图「" + label + "」", "ok");
+      if (!target || !target.slot) return;
+      var imageId = result && result.image ? str(result.image.id) : "";
+      if (!imageId) {
+        setStatus($("#ref-status"), "图片已上传，但没拿到图片 id；请在上面点「上传/更换」再试一次", "warn");
+        return;
+      }
+      try {
+        var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayloadWithSlot(target.group, target.slot, imageId)));
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-status"), "已上传并设为" + refTargetShortLabel(target.slot), "ok");
+      } catch (err) {
+        setStatus($("#ref-status"), "图片已上传，但写入槽位失败：" + normalizeError(err), "err");
+      }
+    });
+  }
+
+  /* ---------- 槽位 ---------- */
+
+  function refSlotsPayload() {
+    var lib = state.referenceLibrary || normalizeReferenceLibrary(null);
+    return {
+      main: { dual: !!lib.main.dual, body: str(lib.main.body), head: str(lib.main.head) },
+      backup: { enabled: !!lib.backup.enabled, single: !!lib.backup.single, image: str(lib.backup.image), image2: str(lib.backup.image2) }
+    };
+  }
+
+  function refSlotsPayloadWithSlot(group, slot, imageId) {
+    var payload = refSlotsPayload();
+    if (group === "main") {
+      if (slot === "main2") payload.main.head = str(imageId);
+      else payload.main.body = str(imageId);
+    } else {
+      if (slot === "backup2") payload.backup.image2 = str(imageId);
+      else payload.backup.image = str(imageId);
+    }
+    return payload;
+  }
+
+  function refSlotCard(group, slot, disabled) {
+    var card = el("div", "ref-slot" + (disabled ? " is-off" : ""));
+    var title = el("div", "ref-slot-title", refSlotLabel(slot));
+    card.appendChild(title);
+    var body = el("div", "ref-slot-body");
+    var imageId = refSlotImageId(group, slot);
+    if (imageId) {
+      var thumb = document.createElement("img");
+      thumb.className = "ref-slot-thumb";
+      thumb.alt = refSlotLabel(slot);
+      refThumbInto(imageId, thumb);
+      thumb.addEventListener("click", function () { openRefFullImage(imageId); });
+      body.appendChild(thumb);
+    } else {
+      body.appendChild(el("div", "ref-slot-empty", "未设置"));
+    }
+    var actions = el("div", "ref-slot-actions");
+    var pick = el("button", "btn btn-ghost btn-mini", "上传/更换");
+    pick.type = "button";
+    pick.disabled = !!disabled;
+    pick.addEventListener("click", function () {
+      triggerRefFile({ group: group, slot: slot, role: group === "backup" ? "backup" : "main" }, pick);
+    });
+    actions.appendChild(pick);
+    var remove = el("button", "btn btn-ghost btn-mini", "清除");
+    remove.type = "button";
+    remove.disabled = !!disabled || !imageId;
+    remove.addEventListener("click", function () { clearRefSlot(group, slot, remove); });
+    actions.appendChild(remove);
+    body.appendChild(actions);
+    card.appendChild(body);
+    return card;
+  }
+
+  function renderRefSlots() {
+    var lib = state.referenceLibrary;
+    if (!lib) return;
+    var dual = $("#ref-main-dual");
+    if (dual) {
+      dual.checked = !!lib.main.dual;
+      dual.disabled = false;
+    }
+    var enabled = $("#ref-backup-enabled");
+    if (enabled) enabled.checked = !!lib.backup.enabled;
+    var single = $("#ref-backup-single");
+    if (single) single.checked = !!lib.backup.single;
+    var mainHost = $("#ref-main-slots");
+    if (mainHost) {
+      clear(mainHost);
+      mainHost.appendChild(refSlotCard("main", "main1", false));
+      mainHost.appendChild(refSlotCard("main", "main2", !lib.main.dual));
+    }
+    var backupHost = $("#ref-backup-slots");
+    if (backupHost) {
+      clear(backupHost);
+      if (lib.backup.enabled) {
+        backupHost.appendChild(refSlotCard("backup", "backup1", false));
+        if (!lib.backup.single) backupHost.appendChild(refSlotCard("backup", "backup2", false));
+      }
+    }
+    var backupWrap = $("#ref-backup-wrap");
+    if (backupWrap) backupWrap.hidden = !lib.backup.enabled;
+  }
+
+  async function clearRefSlot(group, slot, btn) {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    var imageId = refSlotImageId(group, slot);
+    if (!imageId) return;
+    var confirmed = await openModal({
+      title: "清除" + refTargetShortLabel(slot),
+      body: "只会把这个槽位清空，图片仍然留在下面的参考图墙里，可以随时重新选回来；确定清除吗？",
+      okText: "清除",
+      danger: true
+    });
+    if (!confirmed) return;
+    await exclusive("refs", btn, async function () {
+      setStatus($("#ref-slot-status"), "保存中…", "run");
+      try {
+        var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayloadWithSlot(group, slot, "")));
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-slot-status"), "已清除" + refTargetShortLabel(slot), "ok");
+        toast("已清除" + refTargetShortLabel(slot), "warn");
+      } catch (err) {
+        setStatus($("#ref-slot-status"), "清除失败：" + normalizeError(err), "err");
+        toast(normalizeError(err), "err");
+      }
+    });
+  }
+
+  async function handleSaveRefSlots(btn) {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    await exclusive("refs", btn, async function () {
+      setStatus($("#ref-slot-status"), "保存中…", "run");
+      try {
+        var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayload()));
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-slot-status"), "主站/副站参考图设置已保存", "ok");
+        toast("主站/副站参考图设置已保存", "ok");
+      } catch (err) {
+        setStatus($("#ref-slot-status"), "保存失败：" + normalizeError(err), "err");
+        toast(normalizeError(err), "err");
+      }
+    });
+  }
+
+  /* ---------- 已上传的图片墙 ---------- */
+
+  function refUsageTags(id) {
+    var lib = state.referenceLibrary;
+    var tags = [];
+    if (!lib) return tags;
+    if (str(lib.main.body) === id) tags.push("槽位 主站参考图1");
+    if (str(lib.main.head) === id) tags.push("槽位 主站参考图2");
+    if (str(lib.backup.image) === id) tags.push("槽位 副站参考图1");
+    if (str(lib.backup.image2) === id) tags.push("槽位 副站参考图2");
+    (lib.conditions || []).forEach(function (cond) {
+      var label = str(cond.label) || str(cond.id) || "未命名";
+      var images = cond.images || {};
+      var where = [];
+      ["main1", "main2", "backup1", "backup2"].forEach(function (slot) {
+        if (str(images[slot]) === id) where.push(str(REF_TARGET_LABELS[slot]) || slot);
+      });
+      if (where.length) tags.push("条件 " + label + "（" + where.join("、") + "）");
+    });
+    return tags;
+  }
+
+  function renderRefWall() {
+    var host = $("#ref-wall");
+    if (!host) return;
+    clear(host);
+    var lib = state.referenceLibrary;
+    var images = lib && Array.isArray(lib.images) ? lib.images : [];
+    var empty = $("#ref-wall-empty");
+    if (empty) empty.hidden = images.length > 0;
+    var count = $("#ref-count");
+    if (count) count.textContent = String(images.length);
+    images.forEach(function (item) {
+      var card = el("div", "ref-card");
+      var thumb = document.createElement("img");
+      thumb.className = "ref-card-thumb";
+      thumb.alt = str(item.label) || "参考图";
+      refThumbInto(item.id, thumb);
+      thumb.addEventListener("click", function () { openRefFullImage(item.id); });
+      card.appendChild(thumb);
+      var body = el("div", "ref-card-body");
+      body.appendChild(el("div", "ref-card-name", str(item.label) || str(item.id)));
+      body.appendChild(el("div", "ref-card-meta", (item.width || "?") + "x" + (item.height || "?") + " · " + refRoleLabel(item.role)));
+      var tagRow = el("div", "ref-card-tags");
+      /* 起过衣服名字的图：先把衣服 / 可摘帽 / 可脱外套标签放在使用标签前面；
+         勾了「只做单图参考」的图不算衣服，标签也单独标出来 */
+      var costumeTag = str(item.costume);
+      if (costumeTag) tagRow.appendChild(el("span", "ref-tag", "衣服：" + costumeTag));
+      if (item.single_ref) {
+        tagRow.appendChild(el("span", "ref-tag", "只做单图参考"));
+      } else if (costumeTag) {
+        if (item.hat) tagRow.appendChild(el("span", "ref-tag", "可摘帽"));
+        if (item.outer) tagRow.appendChild(el("span", "ref-tag", "可脱外套"));
+      }
+      var tags = refUsageTags(item.id);
+      if (!tags.length) tags = ["未使用"];
+      tags.forEach(function (text) { tagRow.appendChild(el("span", "ref-tag", text)); });
+      body.appendChild(tagRow);
+      card.appendChild(body);
+      var actions = el("div", "ref-card-actions");
+      var outfit = el("button", "btn btn-ghost btn-small", "衣服设置");
+      outfit.type = "button";
+      outfit.addEventListener("click", function () { editRefCostume(item, outfit); });
+      actions.appendChild(outfit);
+      var rename = el("button", "btn btn-ghost btn-small", "改名");
+      rename.type = "button";
+      rename.addEventListener("click", function () { renameRefImage(item, rename); });
+      actions.appendChild(rename);
+      var remove = el("button", "btn btn-ghost btn-small btn-danger-text", "删除");
+      remove.type = "button";
+      remove.addEventListener("click", function () { deleteRefImage(item, remove); });
+      actions.appendChild(remove);
+      card.appendChild(actions);
+      host.appendChild(card);
+    });
+  }
+
+  /* 给参考图起个衣服名字：起名后这套衣服会出现在生图测试的「参考图衣服」里 */
+  async function editRefCostume(item, btn) {
+    var field = el("div", "field");
+    var nameInput = inputText(item.costume || "", "例如：冬装");
+    field.appendChild(labeled("衣服名称", nameInput, "起名后这套衣服会出现在生图测试的「参考图衣服」里；留空表示不当作衣服"));
+    var row = el("div", "ref-cond-targets");
+    var hatLabel = el("label", "");
+    var hatBox = document.createElement("input");
+    hatBox.type = "checkbox";
+    hatBox.checked = !!item.hat;
+    hatLabel.appendChild(hatBox);
+    hatLabel.appendChild(document.createTextNode(" 可摘帽子（多一个「脱帽」档位）"));
+    row.appendChild(hatLabel);
+    var outerLabel = el("label", "");
+    var outerBox = document.createElement("input");
+    outerBox.type = "checkbox";
+    outerBox.checked = !!item.outer;
+    outerLabel.appendChild(outerBox);
+    outerLabel.appendChild(document.createTextNode(" 可脱外套（多一个「脱外套」档位）"));
+    row.appendChild(outerLabel);
+    field.appendChild(row);
+    var singleLabel = el("label", "checkline");
+    var singleBox = document.createElement("input");
+    singleBox.type = "checkbox";
+    singleBox.checked = !!item.single_ref;
+    singleLabel.appendChild(singleBox);
+    singleLabel.appendChild(document.createTextNode(" 这张图只做单图参考（不当衣服，不进生图测试）"));
+    field.appendChild(singleLabel);
+    field.appendChild(el("div", "field-hint",
+      "勾上「只做单图参考」后，这张图只当参考图用：即使写了名字也不会出现在生图测试的参考图衣服下拉里，帽/外套档位也不生效"));
+    var ok = await openModal({ title: "参考图衣服设置", body: field, okText: "保存" });
+    if (!ok) return;
+    var name = str(nameInput.value).trim();
+    if (btn) btn.disabled = true;
+    try {
+      var snapshot = await api({ action: "save_ref_costume", id: item.id, costume: name,
+        hat: !!hatBox.checked, outer: !!outerBox.checked, single_ref: !!singleBox.checked });
+      applyRefLibrary(snapshot);
+      toast(singleBox.checked
+        ? "已把这张图标成「只做单图参考」，不会出现在生图测试里"
+        : (name ? ("已把这张图标成衣服「" + name + "」") : "已取消这张图的衣服名字"), "ok");
+    } catch (err) {
+      toast(normalizeError(err), "err");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function renameRefImage(item, btn) {
+    var field = el("div", "field");
+    var input = inputText(item.label, "参考图名称");
+    field.appendChild(labeled("名称", input, "只改名字，不会重新上传图片"));
+    var ok = await openModal({ title: "改参考图名称", body: field, okText: "保存" });
+    if (!ok) return;
+    var label = str(input.value).replace(/\s+$/, "").trim();
+    if (!label) { toast("名称不能为空", "warn"); return; }
+    if (btn) btn.disabled = true;
+    try {
+      var result = await api({ action: "rename_ref_image", id: item.id, label: label });
+      applyRefLibrary(result && result.library);
+      toast("已改名：" + label, "ok");
+    } catch (err) {
+      toast(normalizeError(err), "err");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function deleteRefImage(item, btn) {
+    var ok = await openModal({
+      title: "删除参考图",
+      body: "会把「" + (str(item.label) || str(item.id)) + "」从参考图库里删掉；条件里用到它的位置会清空（条件本身保留），槽位里引用它的位置也会清空；原图文件后端会先备份；确定删除吗？",
+      okText: "删除",
+      danger: true
+    });
+    if (!ok) return;
+    if (btn) btn.disabled = true;
+    try {
+      var result = await api({ action: "delete_ref_image", id: item.id });
+      delete REF_THUMB_CACHE[item.id];
+      applyRefLibrary(result && result.library);
+      var removed = Number(result && result.conditions_removed);
+      var updated = Number(result && result.conditions_updated);
+      if (isFinite(removed) && removed > 0) toast("同时删掉了 " + removed + " 条用它的条件", "warn", 8000);
+      else if (isFinite(updated) && updated > 0) toast("已从 " + updated + " 条条件里清掉这个位置", "warn", 8000);
+      else toast("已删除参考图", "ok");
+    } catch (err) {
+      toast(normalizeError(err), "err");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /* ---------- 条件参考图 ---------- */
+
+  function refCondAutoLabel(cond) {
+    if (cond.type === "date") {
+      function pad2(value) { return (value < 10 ? "0" : "") + String(value); }
+      function md(year, month, day) {
+        return (year ? String(year) + "-" : "") + pad2(month) + "-" + pad2(day);
+      }
+      var start = md(cond.start_year, cond.start_month || 1, cond.start_day || 1);
+      if (!cond.end_month || !cond.end_day) {
+        return (cond.start_year ? "" : "每年 ") + start;
+      }
+      var endYear = cond.end_year || cond.start_year || null;
+      var end = md(endYear, cond.end_month, cond.end_day);
+      return (cond.start_year ? "" : "每年 ") + start + " 到 " + end;
+    }
+    if (cond.type === "probability") return "概率 " + (Number(cond.percent) || 30) + "%";
+    return "气温" + (cond.op === "gt" ? "高于" : "低于") + " " + (Number(cond.value) === 0 ? 0 : Number(cond.value) || 10) + "℃";
+  }
+
+  function refRoleLabel(role) {
+    if (role === "main") return "主站";
+    if (role === "backup") return "副站";
+    return "其他";
+  }
+
+  function refCondRow(cond) {
+    cond = cond || {};
+    var lib = state.referenceLibrary || normalizeReferenceLibrary(null);
+    var row = el("div", "ref-cond");
+    var line = el("div", "ref-cond-row");
+
+    var images = Array.isArray(lib.images) ? lib.images : [];
+
+    var typeSelect = document.createElement("select");
+    typeSelect.className = "input ref-cond-type";
+    typeSelect.setAttribute("aria-label", "条件类型");
+    var types = Array.isArray(lib.types) && lib.types.length ? lib.types : REF_TYPES;
+    types.forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = str(item.type);
+      option.textContent = str(item.label) || str(item.type);
+      typeSelect.appendChild(option);
+    });
+    var wantType = str(cond.type);
+    typeSelect.value = types.some(function (item) { return str(item.type) === wantType; }) ? wantType : str(types[0].type) || "temp";
+    line.appendChild(typeSelect);
+
+    var extra = el("span", "ref-cond-extra");
+    line.appendChild(extra);
+
+    var enableWrap = el("label", "switch");
+    var enable = document.createElement("input");
+    enable.type = "checkbox";
+    enable.checked = cond.enabled !== false;
+    enableWrap.appendChild(enable);
+    enableWrap.appendChild(document.createTextNode("启用"));
+    line.appendChild(enableWrap);
+
+    var del = el("button", "btn btn-ghost btn-mini ref-cond-del", "删除");
+    del.type = "button";
+    del.addEventListener("click", function () {
+      if (row.parentNode) row.parentNode.removeChild(row);
+    });
+    line.appendChild(del);
+    row.appendChild(line);
+
+    /* 一条条件同时设置主站和副站的参考图：每个位置单独挑一张，
+       选「不替换」＝这个位置保持默认参考图 */
+    var imageSelects = {};
+    function buildSlotSelect(slot) {
+      var select = document.createElement("select");
+      select.className = "input ref-cond-image";
+      select.setAttribute("aria-label", REF_SLOT_LABELS[slot] || slot);
+      var keep = document.createElement("option");
+      keep.value = "";
+      keep.textContent = "不替换";
+      select.appendChild(keep);
+      images.forEach(function (item) {
+        var option = document.createElement("option");
+        option.value = str(item.id);
+        option.textContent = str(item.label) || str(item.id);
+        select.appendChild(option);
+      });
+      var want = str((cond.images || {})[slot]);
+      select.value = images.some(function (item) { return str(item.id) === want; })
+        ? want : "";
+      if (!images.length) select.disabled = true;
+      return select;
+    }
+
+    [["main", "主站参考图", ["main1", "main2"]],
+     ["backup", "副站参考图", ["backup1", "backup2"]]].forEach(function (group) {
+      var siteRow = el("div", "ref-cond-site" + (group[0] === "backup" ? " ref-cond-site-backup" : ""));
+      siteRow.appendChild(el("span", "ref-cond-site-label", group[1]));
+      group[2].forEach(function (slot) {
+        var box = el("span", "ref-cond-site-slot");
+        box.appendChild(el("span", "ref-cond-site-name", str(REF_TARGET_LABELS[slot]) || slot));
+        var select = buildSlotSelect(slot);
+        imageSelects[slot] = select;
+        box.appendChild(select);
+        siteRow.appendChild(box);
+      });
+      row.appendChild(siteRow);
+    });
+    row.appendChild(el("div", "field-hint",
+      "一条条件可以同时换主站和副站；某个位置选「不替换」就保持默认参考图。"
+      + "主站参考图2 只在勾了「生图站支持双参考图」时生效，副站参考图2 只在副站没勾「副站只有单参考图」时生效"));
+
+    var model = {
+      startYear: cond.start_year || null,
+      startMonth: isFinite(Number(cond.start_month)) && Number(cond.start_month) ? Number(cond.start_month) : 1,
+      startDay: isFinite(Number(cond.start_day)) && Number(cond.start_day) ? Number(cond.start_day) : 1,
+      endYear: cond.end_year || null,
+      endMonth: cond.end_month ? Number(cond.end_month) : null,
+      endDay: cond.end_day ? Number(cond.end_day) : null,
+      op: str(cond.op) === "gt" ? "gt" : "lt",
+      value: isFinite(Number(cond.value)) ? Number(cond.value) : 10,
+      percent: isFinite(Number(cond.percent)) ? Number(cond.percent) : 30
+    };
+    var inputs = { op: null, value: null, percent: null };
+
+    function yearInput(value, which) {
+      var input = document.createElement("input");
+      input.type = "number";
+      input.className = "input input-number ref-cond-year";
+      input.min = "1900";
+      input.max = "2999";
+      input.step = "1";
+      input.placeholder = "年";
+      input.title = "年份（留空＝每年都有）";
+      input.value = value ? String(value) : "";
+      input.addEventListener("input", function () {
+        var text = str(input.value).trim();
+        if (!text) { model[which] = null; return; }
+        var number = Number(text);
+        if (isFinite(number) && number >= 1900 && number <= 2999) {
+          model[which] = Math.round(number);
+        }
+      });
+      return input;
+    }
+
+    function numberBox(value, low, high, placeholder, which) {
+      var input = document.createElement("input");
+      input.type = "number";
+      input.className = "input input-number ref-cond-num";
+      input.min = String(low);
+      input.max = String(high);
+      input.placeholder = placeholder;
+      input.value = value === null || value === undefined || value === "" ? "" : String(value);
+      input.addEventListener("input", function () {
+        var text = str(input.value).trim();
+        if (!text) { model[which] = null; return; }
+        model[which] = clampInt(text, low, high, model[which]);
+      });
+      input.addEventListener("blur", function () {
+        if (model[which] !== null && model[which] !== undefined) {
+          input.value = String(model[which]);
+        }
+      });
+      return input;
+    }
+
+    function buildExtra() {
+      clear(extra);
+      inputs.op = null;
+      inputs.value = null;
+      inputs.percent = null;
+      var type = typeSelect.value;
+      if (type === "date") {
+        var startYear = yearInput(model.startYear, "startYear");
+        var startMonth = numberBox(model.startMonth, 1, 12, "月", "startMonth");
+        var startDay = numberBox(model.startDay, 1, 31, "日", "startDay");
+        var endYear = yearInput(model.endYear, "endYear");
+        var endMonth = numberBox(model.endMonth, 1, 12, "月", "endMonth");
+        var endDay = numberBox(model.endDay, 1, 31, "日", "endDay");
+        startMonth.title = "开始月份";
+        startDay.title = "开始日期";
+        endMonth.title = "结束月份（留空＝只生效开始那天）";
+        endDay.title = "结束日期（留空＝只生效开始那天）";
+        extra.appendChild(document.createTextNode("从 "));
+        extra.appendChild(startYear);
+        extra.appendChild(document.createTextNode("年"));
+        extra.appendChild(startMonth);
+        extra.appendChild(document.createTextNode("月"));
+        extra.appendChild(startDay);
+        extra.appendChild(document.createTextNode("日 到 "));
+        extra.appendChild(endYear);
+        extra.appendChild(document.createTextNode("年"));
+        extra.appendChild(endMonth);
+        extra.appendChild(document.createTextNode("月"));
+        extra.appendChild(endDay);
+        extra.appendChild(document.createTextNode("日"));
+        extra.appendChild(el("span", "muted-inline",
+          "（年份留空＝每年都有；结束日期留空＝只生效开始那天）"));
+      } else if (type === "temp") {
+        inputs.op = document.createElement("select");
+        inputs.op.className = "input ref-cond-op";
+        [{ value: "lt", label: "低于" }, { value: "gt", label: "高于" }].forEach(function (item) {
+          var option = document.createElement("option");
+          option.value = item.value;
+          option.textContent = item.label;
+          inputs.op.appendChild(option);
+        });
+        inputs.op.value = model.op === "gt" ? "gt" : "lt";
+        inputs.op.addEventListener("change", function () {
+          model.op = inputs.op.value === "gt" ? "gt" : "lt";
+        });
+        inputs.value = numberInput(model.value, -60, 60, 0.5);
+        inputs.value.className = "input input-number ref-cond-num";
+        inputs.value.title = "当天平均气温";
+        inputs.value.addEventListener("input", function () {
+          var next = Number(inputs.value.value);
+          if (isFinite(next)) model.value = next;
+        });
+        extra.appendChild(document.createTextNode("当天平均气温"));
+        extra.appendChild(inputs.op);
+        extra.appendChild(inputs.value);
+        extra.appendChild(document.createTextNode("℃"));
+      } else {
+        inputs.percent = numberInput(model.percent, 1, 100, 1);
+        inputs.percent.className = "input input-number ref-cond-num";
+        inputs.percent.title = "每天命中的概率";
+        inputs.percent.addEventListener("input", function () {
+          model.percent = clampInt(inputs.percent.value, 1, 100, model.percent);
+        });
+        extra.appendChild(document.createTextNode("每天 "));
+        extra.appendChild(inputs.percent);
+        extra.appendChild(document.createTextNode("% 概率"));
+      }
+    }
+    typeSelect.addEventListener("change", buildExtra);
+    buildExtra();
+
+    row.__refCond = function () {
+      var type = typeSelect.value;
+      var out = {
+        label: str(cond.label),
+        images: {},
+        type: type,
+        enabled: !!enable.checked
+      };
+      ["main1", "main2", "backup1", "backup2"].forEach(function (slot) {
+        var select = imageSelects[slot];
+        var value = select ? str(select.value) : "";
+        if (value) out.images[slot] = value;
+      });
+      if (cond.id) out.id = str(cond.id);
+      if (type === "date") {
+        out.start_year = model.startYear || null;
+        out.start_month = clampInt(model.startMonth, 1, 12, 1);
+        out.start_day = clampInt(model.startDay, 1, 31, 1);
+        var hasEndMonth = model.endMonth !== null && model.endMonth !== undefined;
+        var hasEndDay = model.endDay !== null && model.endDay !== undefined;
+        if (hasEndMonth !== hasEndDay) out.__end_incomplete = true;
+        if (hasEndMonth && hasEndDay) {
+          out.end_year = model.endYear || null;
+          out.end_month = clampInt(model.endMonth, 1, 12, 1);
+          out.end_day = clampInt(model.endDay, 1, 31, 1);
+        } else {
+          out.end_year = null;
+          out.end_month = null;
+          out.end_day = null;
+        }
+      } else if (type === "temp") {
+        out.op = model.op === "gt" ? "gt" : "lt";
+        out.value = isFinite(Number(model.value)) ? Number(model.value) : 10;
+      } else {
+        out.percent = clampInt(model.percent, 1, 100, 30);
+      }
+      if (!out.label) out.label = refCondAutoLabel(out);
+      return out;
+    };
+    return row;
+  }
+
+  function renderRefConditions() {
+    var host = $("#ref-conds");
+    if (!host) return;
+    clear(host);
+    var lib = state.referenceLibrary;
+    if (!lib) return;
+    var images = Array.isArray(lib.images) ? lib.images : [];
+    var empty = $("#ref-cond-empty");
+    if (empty) empty.hidden = images.length > 0;
+    var addBtn = $("#ref-cond-add");
+    if (addBtn) addBtn.disabled = !images.length;
+    (lib.conditions || []).forEach(function (cond) {
+      host.appendChild(refCondRow(cond));
+    });
+  }
+
+  function addRefCondition() {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    var images = Array.isArray(lib.images) ? lib.images : [];
+    if (!images.length) { toast("先在上面上传参考图，再来加条件", "warn"); return; }
+    var host = $("#ref-conds");
+    if (!host) return;
+    host.appendChild(refCondRow({
+      id: "",
+      label: "",
+      images: { main1: str(images[0].id) },
+      type: "temp",
+      enabled: true,
+      op: "lt",
+      value: 10
+    }));
+    var rows = $all(".ref-cond", host);
+    var last = rows[rows.length - 1];
+    if (last) last.scrollIntoView({ block: "nearest" });
+  }
+
+  function collectRefConditions() {
+    var host = $("#ref-conds");
+    if (!host) return [];
+    var out = [];
+    $all(".ref-cond", host).forEach(function (row) {
+      if (typeof row.__refCond !== "function") return;
+      out.push(row.__refCond());
+    });
+    return out;
+  }
+
+  async function handleSaveRefConditions(btn) {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    var conditions = collectRefConditions();
+    for (var i = 0; i < conditions.length; i++) {
+      var pickedSlots = conditions[i].images ? Object.keys(conditions[i].images) : [];
+      if (!pickedSlots.length) {
+        setStatus($("#ref-cond-status"),
+          "第 " + (i + 1) + " 条条件还没有给主站或副站选参考图", "err");
+        return;
+      }
+      if (conditions[i].type === "date" && conditions[i].__end_incomplete) {
+        setStatus($("#ref-cond-status"),
+          "第 " + (i + 1) + " 条日期条件的结束日期要么月份日期都填，要么都留空（留空＝只生效开始那天）", "err");
+        return;
+      }
+      delete conditions[i].__end_incomplete;
+    }
+    await exclusive("refs", btn, async function () {
+      setStatus($("#ref-cond-status"), "保存中…", "run");
+      try {
+        var snapshot = await api({ action: "save_ref_conditions", conditions: conditions });
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-cond-status"), "已保存 " + conditions.length + " 条条件", "ok");
+        toast("条件参考图已保存", "ok");
+      } catch (err) {
+        setStatus($("#ref-cond-status"), "保存失败：" + normalizeError(err), "err");
+        toast(normalizeError(err), "err");
+      }
+    });
+  }
+
+  /* ---------- 渲染入口（bootstrap 还没回来时安全返回） ---------- */
+
+  function renderRefPanel() {
+    var lib = state.referenceLibrary;
+    if (!lib) return;
+    renderRefTakeover();
+    renderRefSlots();
+    renderRefWall();
+    renderRefConditions();
   }
 
   function selectTab(name) {
@@ -6579,6 +8109,8 @@
 
     var testGo = $("#t-go");
     if (testGo) testGo.addEventListener("click", function () { handleTest(testGo); });
+    var testCancel = $("#t-cancel");
+    if (testCancel) testCancel.addEventListener("click", function () { cancelTestJob(testCancel); });
     var paid = $("#t-paid");
     if (paid) paid.addEventListener("change", refreshTestAvailability);
     var homeJump = $("#t-go-home");
@@ -6617,7 +8149,8 @@
     });
     var costumeSource = $("#t-costume-source");
     if (costumeSource) costumeSource.addEventListener("change", function () {
-      state.testCostumeSource = costumeSource.value === "event" ? "event" : "daily";
+      state.testCostumeSource = costumeSource.value === "event" ? "event"
+        : costumeSource.value === "ref" ? "ref" : "daily";
       state.testEventCostume = null;
       syncTestPanel();
     });
@@ -6626,8 +8159,10 @@
       state.testActionSource = actionSource.value === "event" ? "event"
         : actionSource.value === "meal" ? "meal"
         : actionSource.value === "sleep" ? "sleep"
-        : actionSource.value === "selfie" ? "selfie" : "daily";
-      if (state.testActionSource === "daily" || state.testActionSource === "selfie") {
+        : actionSource.value === "selfie" ? "selfie"
+        : actionSource.value === "interaction" ? "interaction" : "daily";
+      if (state.testActionSource === "daily" || state.testActionSource === "selfie"
+          || state.testActionSource === "interaction") {
         state.testAction = "";
         var actionBox = $("#t-action");
         if (actionBox) actionBox.value = "";
@@ -6791,6 +8326,41 @@
       eventList.addEventListener("change", onEventInput);
       eventList.addEventListener("click", function (domEvent) { onEventClick(domEvent); });
     }
+
+    /* ---- 参考图页 ---- */
+    var refFile = $("#ref-file");
+    if (refFile) refFile.addEventListener("change", onRefFileChange);
+    var refPick = $("#ref-pick");
+    if (refPick) refPick.addEventListener("click", function () { triggerRefFile(null, refPick); });
+    var refMainDual = $("#ref-main-dual");
+    if (refMainDual) refMainDual.addEventListener("change", function () {
+      if (!state.referenceLibrary) return;
+      state.referenceLibrary.main.dual = !!refMainDual.checked;
+      renderRefSlots();
+      setStatus($("#ref-slot-status"), "勾选已改；点「保存主站/副站设置」才写入", "warn");
+    });
+    var refBackupEnabled = $("#ref-backup-enabled");
+    if (refBackupEnabled) refBackupEnabled.addEventListener("change", function () {
+      if (!state.referenceLibrary) return;
+      state.referenceLibrary.backup.enabled = !!refBackupEnabled.checked;
+      renderRefSlots();
+      setStatus($("#ref-slot-status"), "勾选已改；点「保存主站/副站设置」才写入", "warn");
+    });
+    var refBackupSingle = $("#ref-backup-single");
+    if (refBackupSingle) refBackupSingle.addEventListener("change", function () {
+      if (!state.referenceLibrary) return;
+      state.referenceLibrary.backup.single = !!refBackupSingle.checked;
+      renderRefSlots();
+      setStatus($("#ref-slot-status"), "勾选已改；点「保存主站/副站设置」才写入", "warn");
+    });
+    var refSaveSlots = $("#ref-save-slots");
+    var refAdopt = $("#ref-adopt");
+    if (refAdopt) refAdopt.addEventListener("click", function () { handleAdoptBuiltin(refAdopt); });
+    if (refSaveSlots) refSaveSlots.addEventListener("click", function () { handleSaveRefSlots(refSaveSlots); });
+    var refCondAdd = $("#ref-cond-add");
+    if (refCondAdd) refCondAdd.addEventListener("click", addRefCondition);
+    var refCondSave = $("#ref-cond-save");
+    if (refCondSave) refCondSave.addEventListener("click", function () { handleSaveRefConditions(refCondSave); });
   }
 
   async function init() {
@@ -6813,7 +8383,9 @@
   selectTab("test");
   init();
 
-  /* 关闭或刷新页面不取消后台任务：服务端继续执行，回来时由 resumePendingJobs 接上。 */
+  /* 退出工作台时取消还在跑的付费生图；草稿/城市生成等文本任务仍在后台继续，回来由 resumePendingJobs 接上。 */
+  window.addEventListener("pagehide", cancelTestJobsOnLeave);
+  window.addEventListener("beforeunload", cancelTestJobsOnLeave);
 })();
 </script>
 </body>
