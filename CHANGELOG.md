@@ -3,6 +3,12 @@
 本插件从 **v1.5.0** 起做了一次代码解耦与工作台重做，v1.5.1–v1.5.18 大多是这轮重构的收尾与打磨。
 为了让更新记录更好读，这段过程合并成下面一份「能力与体验」说明；v1.4.2 及更早的历史放在文末存档。
 
+## v1.6.5 · 修复上架审核问题：logger 改为从 astrbot.api 导入
+
+- **`selfie_core/workspace.py` 的 logger 改成 `from astrbot.api import logger`**：原来用的是 Python 内置 `logging`（`import logging` + `logging.getLogger(__name__)`），不符合插件市场上架审核「logger 必须且只能从 astrbot.api 导入，严禁使用 Python 内置 logging 模块」的规定；现在随包发布的 Python 文件都只从 `astrbot.api` 取 logger，不再有任何内置 logging。
+- **数据目录只用 `StarTools.get_data_dir`**：删掉 `StarTools.get_data_dir` 异常时回退到 `os.getcwd()/data/<插件名>` 的分支，用户数据固定落在 AstrBot 的标准插件数据目录（`data/plugin_data/` 下），可迁移、可审计。
+- 测试：补上单测里 `astrbot.api.logger` 的桩（以前部分单测直接 import `selfie_core.workspace`、不启动 AstrBot）；新增 `test_compliance` 回归测试（随包发布的 Python 文件里不许出现内置 logging、`workspace.py` 必须从 `astrbot.api` 取 logger、数据目录不许回退到 cwd）；全量 **629 项**通过。
+
 ## v1.6.4 · 不再内置默认形象、参考图接管冬装与素颜、cos 锁脸、新手引导重写
 
 - **不再随包发布 `assets/`，也不再保留默认形象**：仓库和发布 zip 里删掉全部内置参考图（三视图、脸部、单图、素颜、冬装），插件里没有任何硬编码的长相描述；长相、发型、衣服全部来自工作台「参考图」页上传的图片，没填参考图时不生成，并提示去「参考图」页上传并填好主站 / 副站参考图。原来的「填入内置参考图」按钮一并删除。

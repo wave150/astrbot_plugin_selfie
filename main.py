@@ -90,10 +90,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         self.conf = config or {}
         # A running instance has one identity snapshot; reload to switch identities.
         self._active_profile = self._profile()
-        try:
-            data_dir = str(StarTools.get_data_dir(PLUGIN_NAME))
-        except Exception:
-            data_dir = os.path.join(os.getcwd(), "data", PLUGIN_NAME)
+        # 数据目录只用 AstrBot 的标准插件数据目录：可迁移、可审计，不做 cwd 回退
+        data_dir = str(StarTools.get_data_dir(PLUGIN_NAME))
         self.base_data_dir = data_dir
         try:
             os.makedirs(data_dir, exist_ok=True)

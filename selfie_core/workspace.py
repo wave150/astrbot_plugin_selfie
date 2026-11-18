@@ -7,7 +7,6 @@ Drafts are process-local, expire after 30 minutes, and never persist LLM images.
 from copy import deepcopy
 from datetime import datetime
 import json
-import logging
 import math
 from pathlib import Path
 import re
@@ -28,7 +27,7 @@ from .meal import MEAL_SETUPS, meal_cue
 from .defaults import SLEEPWEAR_SETS
 from .sleep import SLEEP_KINDS, sleep_cue
 
-logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
