@@ -411,7 +411,9 @@
                 <option value="daily">日常服装（服装库）</option>
                 <option value="ref">参考图衣服（参考图页）</option>
                 <option value="event">事件服装（事件素材）</option>
+                <option value="sleepwear">睡衣（世界设置 → 家）</option>
               </select>
+              <div class="field-hint">选「睡衣」时下拉里是「世界设置 → 家 → 夜间睡衣」那几套，改了睡衣列表不用先保存，这里直接是最新的。</div>
             </div>
             <div class="field">
               <label class="field-label" for="t-costume">服装</label>
@@ -447,9 +449,9 @@
           <div class="field">
             <label class="checkline" for="t-bare-face">
               <input type="checkbox" id="t-bare-face" />
-              <span>素颜（脸部参考图换成卸妆后的素颜三视图）</span>
+              <span>素颜（脸部参考图换成参考图页启用的素颜三视图）</span>
             </label>
-            <div class="field-hint">勾上后这张测试图强制用「夜间睡觉房间」那张素颜脸部参考图，不用等到 22:00；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。</div>
+            <div class="field-hint" id="t-bare-hint">勾上后这张测试图强制用「参考图」页启用并上传的那张素颜三视图，不用等到 22:00；只在写实风格下生效，参考图页没启用素颜时这个勾选框不可用。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。</div>
           </div>
         </section>
       </div>
@@ -656,6 +658,16 @@
           </div>
         </div>
 
+        <div class="card-group">
+          <div class="group-title">夜间睡衣（sleepwear）</div>
+          <div class="field-hint" style="margin:0 0 8px">22:00 后的自拍会从这里随机挑一套（同一晚固定、不会连着两晚一样）；可增删改，至少留一套。只填衣服本身，姿势、动作和场景由动作库 / 场景库决定。留空名字会用描述开头代替。</div>
+          <div class="room-list" id="w-sleepwear"></div>
+          <div class="row-actions">
+            <button class="btn btn-ghost" id="w-sleepwear-add" type="button">+ 添加睡衣</button>
+            <span class="muted-inline">只覆盖当前编辑，保存后才写入</span>
+          </div>
+        </div>
+
         <details class="card-group">
           <summary class="group-title">高级设置（文件路径 / stay_home_probability）</summary>
           <div class="field-hint" style="margin:8px 0">这些路径由服务端直接读取：留空表示使用默认文件或原配置；改动前请确认文件存在，否则可能读不到素材。</div>
@@ -778,15 +790,14 @@
         <div class="ref-state" id="ref-state">
           <div class="ref-state-row"><span class="ref-tag" id="ref-state-tag">未接管</span><span id="ref-state-text">正在读取参考图状态</span></div>
           <div class="row-actions" style="margin-top:0">
-            <button class="btn btn-primary" id="ref-adopt" type="button">填入内置参考图</button>
-            <span class="status" id="ref-adopt-status"></span>
+            <span class="status" id="ref-adopt-status">第一次用请先在下面上传自己的角色参考图</span>
           </div>
         </div>
       </section>
 
       <section class="card">
         <h2 class="card-title">上传参考图</h2>
-        <p class="card-hint">点下面的按钮从本地选图片上传（支持 JPEG / PNG / WebP，单张不超过 8MB）；上传只是把图加进下面的图片墙，不会覆盖任何东西，也不会自动替换槽位——想让它当参考图，还要在槽位里选它并保存</p>
+        <p class="card-hint">点下面的按钮从本地选图片上传（支持 JPEG / PNG / WebP，单张不超过 8MB）。第一次用：先上传一张正面全身或大半身的角色图，裁好后在主站参考图 1 里选它并保存；上传只是把图加进图片墙，不会自动替换槽位</p>
         <input id="ref-file" type="file" accept="image/*" hidden />
         <div class="row-actions">
           <button class="btn btn-primary" id="ref-pick" type="button">打开本地文件</button>
@@ -818,6 +829,17 @@
       </section>
 
       <section class="card">
+        <h2 class="card-title">夜间素颜参考图</h2>
+        <p class="card-hint">素颜时间为 <strong>22:00 到次日 07:00</strong>：这段时间在室内睡觉房间（家里的床、旅店床、青旅床位；网吧包厢和事件场景不算）拍的照片，脸部参考图会换成这张素颜三视图，夜里卸妆后的样子更自然。勾上「启用素颜」后必须上传一张素颜三视图照片，没上传保存时会提示</p>
+        <label class="switch"><input type="checkbox" id="ref-suyan-enabled" /> 启用素颜</label>
+        <div class="ref-slot-grid" id="ref-suyan-slots"></div>
+        <div class="row-actions">
+          <button class="btn btn-primary" id="ref-save-suyan" type="button">保存素颜设置</button>
+          <span class="status" id="ref-suyan-status"></span>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-head">
           <h2 class="card-title">已上传的参考图 <span class="badge" id="ref-count">0</span></h2>
         </div>
@@ -828,7 +850,7 @@
 
       <section class="card">
         <h2 class="card-title">条件参考图</h2>
-        <div class="ref-cond-explain">一条条件可以同时设置主站和副站的参考图：主站参考图1 / 2、副站参考图1 / 2 各选一张，选「不替换」的位置保持默认参考图；同一个位置有多条条件同时命中时，按 <strong>日期 &gt; 气温 &gt; 概率 &gt; 默认参考图</strong> 的顺序生效；气温用当天平均气温（和冬装判定同一份）；概率条件每天早上 7 点判一次，判到就整天沿用这一套；想让它同时出现在生图测试的参考图衣服里，去图片墙点「衣服设置」给它起个名字</div>
+        <div class="ref-cond-explain">一条条件可以同时设置主站和副站的参考图：主站参考图1 / 2、副站参考图1 / 2 各选一张，选「不替换」的位置保持默认参考图；同一个位置有多条条件同时命中时，按 <strong>日期 &gt; 气温 &gt; 概率 &gt; 默认参考图</strong> 的顺序生效；气温用当天平均气温（每天 7 点查一次；想按降温换整套冬装就自己建一条「当日平均气温低于 x℃」的条件）；概率条件每天早上 7 点判一次，判到就整天沿用这一套；想让它同时出现在生图测试的参考图衣服里，去图片墙点「衣服设置」给它起个名字</div>
         <div class="field-hint" id="ref-cond-empty">先在上面上传参考图，再来加条件</div>
         <div class="ref-cond-list" id="ref-conds"></div>
         <div class="row-actions">
@@ -912,6 +934,8 @@
     settings: {},
     homeRoomRows: [],
     homeRoomDefaults: null,
+    sleepwearRows: [],
+    sleepwearDefaults: null,
     overnightScenes: [],
     referenceLibrary: null,
     lookupCity: null,
@@ -931,6 +955,8 @@
     testEventCostume: null,
     testEventOutfits: [],
     testEventActions: [],
+    testSleepwearOptions: [],
+    testSleepwearPick: null,
     testCostumeSource: "daily",
     testActionSource: "daily",
     testEventId: "",
@@ -2651,6 +2677,13 @@
       rooms[name] = str(room && room.text);
     });
 
+    var sleepwear = [];
+    (Array.isArray(input.sleepwear) ? input.sleepwear : []).forEach(function (item) {
+      var desc = str(item && item.desc).trim();
+      if (!desc) return;
+      sleepwear.push({ name: str(item && item.name).trim(), desc: desc });
+    });
+
     var probability = Number(input.probability);
     if (!isFinite(probability)) probability = 0.5;
     probability = Math.min(1, Math.max(0, probability));
@@ -2661,6 +2694,7 @@
       travel_cities: travel,
       city_min_days: days,
       home_rooms: rooms,
+      sleepwear: sleepwear,
       stay_home_probability: Math.round(probability * 100) / 100
     };
     var paths = input.paths && typeof input.paths === "object" ? input.paths : {};
@@ -2786,10 +2820,14 @@
     state.materials = normalizeMaterials(data.materials);
     state.materialRevisions = normalizeMaterialRevisions(data.materials);
     state.cities = normalizeCities(data.cities);
+    /* 内置默认睡衣要先就位：老实例还没有 sleepwear 设置时，
+       世界设置 → 家的「夜间睡衣」也要把内置默认几套显示出来 */
+    state.sleepwearDefaults = (Array.isArray(data.sleepwear_defaults) ? clone(data.sleepwear_defaults) : null);
     if (!state.settingsDirty || options.forceSettings) {
       state.settings = (data.settings && typeof data.settings === "object") ? clone(data.settings) : {};
       state.settingsDirty = false;
       state.homeRoomRows = homeRoomsFromSettings();
+      state.sleepwearRows = sleepwearFromSettings();
     }
     state.savedEvents = normalizeEvents(data.events);
     if (!state.eventsDirty || options.forceEvents) {
@@ -3666,6 +3704,10 @@
       fillRefOutfitSelect(costumeSelect, preserve);
       state.testEventOutfits = [];
       state.testEventCostume = null;
+    } else if (state.testCostumeSource === "sleepwear") {
+      fillSleepwearSelect(costumeSelect, preserve);
+      state.testEventOutfits = [];
+      state.testEventCostume = null;
     } else {
       var outfits = event ? eventOutfitsForTest(event) : [];
       state.testEventOutfits = outfits;
@@ -3747,6 +3789,9 @@
     if ((state.testCostumeSource === "event" || state.testActionSource === "event") && !testEvent()) {
       reasons.push("来源选了事件素材：需要先选一个事件");
     }
+    if (!refSlotsFilled()) {
+      reasons.push("参考图页还没有填参考图：去「参考图」页上传并填好主站 / 副站参考图");
+    }
     var costumeNode = $("#t-costume");
     if (state.testCostumeSource === "daily") {
       if (!state.materials.costume.length) reasons.push("素材库没有服装（costume）");
@@ -3756,6 +3801,12 @@
         reasons.push("参考图页还没有起名字的衣服（去参考图页点「衣服设置」起个名字）");
       } else if (!costumeNode || str(costumeNode.value) === "") {
         reasons.push("还没有选择参考图衣服");
+      }
+    } else if (state.testCostumeSource === "sleepwear") {
+      if (!sleepwearTestOptions().length) {
+        reasons.push("「世界设置 → 家 → 夜间睡衣」里还没有有描述的睡衣");
+      } else if (!costumeNode || str(costumeNode.value) === "" || !state.testSleepwearPick) {
+        reasons.push("还没有选择睡衣");
       }
     } else if (!state.testEventCostume) {
       reasons.push("该事件没有可用的事件服装（先在事件里写服装或设置事件服装随机池）");
@@ -3783,12 +3834,30 @@
     return reasons;
   }
 
+  function suyanRefReady() {
+    var lib = state.referenceLibrary;
+    return !!(lib && lib.suyan && lib.suyan.enabled && str(lib.suyan.image));
+  }
+
   function refreshTestAvailability() {
     var reasons = testAvailability();
     var btn = $("#t-go");
     if (btn) btn.disabled = reasons.length > 0 || anyBusy();
     var avail = $("#t-avail");
     if (avail) avail.textContent = reasons.length ? "暂不可测试：" + reasons.join("；") : "";
+    /* 素颜勾选只在参考图页启用并上传了素颜三视图后才可用 */
+    var bareBox = $("#t-bare-face");
+    if (bareBox) {
+      var ready = suyanRefReady();
+      bareBox.disabled = !ready;
+      if (!ready) bareBox.checked = false;
+      var bareHint = $("#t-bare-hint");
+      if (bareHint) {
+        bareHint.textContent = ready
+          ? "勾上后这张测试图强制用「参考图」页启用并上传的那张素颜三视图，不用等到 22:00；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。"
+          : "参考图页还没有启用素颜：先去「参考图」页勾上「启用素颜」并上传一张素颜三视图照片，这里才能勾选；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。";
+      }
+    }
   }
 
   function updateTestSceneHint() {
@@ -3875,9 +3944,11 @@
     lines.push("城市：" + str(payload.city) + " / " + str(payload.district));
     lines.push(payload.costume_source === "event"
       ? "服装：事件「" + str(payload.event_name || payload.event_id) + "」/ " + str(payload.costume_name)
-      : payload.costume_source === "ref"
-        ? "服装：参考图「" + str(payload.costume_name) + "」（不换装）"
-        : "服装：日常" + (payload.costume_name ? "「" + str(payload.costume_name) + "」" : " #" + str(payload.costume_id)));
+      : payload.costume_source === "sleepwear"
+        ? "服装：睡衣「" + str(payload.costume_name || "睡衣") + "」（换装）"
+        : payload.costume_source === "ref"
+          ? "服装：参考图「" + str(payload.costume_name) + "」（不换装）"
+          : "服装：日常" + (payload.costume_name ? "「" + str(payload.costume_name) + "」" : " #" + str(payload.costume_id)));
     if (payload.bare_face) lines.push("脸部：素颜参考图");
     var actionName = payload.action_source === "event" ? testEventActionName(payload.event_action) : "";
     if (payload.action_source === "meal") {
@@ -4192,6 +4263,12 @@
       payload.costume_name = pickedName;
       costumeLine = "服装：参考图「" + pickedName + "」（不换装）"
         + (refPick[2] === "1" ? " / 摘帽子" : "") + (refPick[3] === "1" ? " / 脱外套" : "");
+    } else if (state.testCostumeSource === "sleepwear") {
+      var sleepwearPick = state.testSleepwearPick;
+      if (!sleepwearPick) { toast("请选择睡衣", "err"); return; }
+      payload.sleepwear = { name: str(sleepwearPick.name), desc: str(sleepwearPick.desc) };
+      payload.costume_name = str(sleepwearPick.name);
+      costumeLine = "服装：睡衣「" + sleepwearPick.name + "」（换装）";
     } else {
       var costume = state.testEventCostume;
       if (!costume) { toast("该事件没有可用的事件服装", "err"); return; }
@@ -4864,11 +4941,22 @@
     return rows;
   }
 
+  function sleepwearFromSettings() {
+    var settings = state.settings || {};
+    var rows = Array.isArray(settings.sleepwear) ? settings.sleepwear : null;
+    if (!rows || !rows.length) rows = Array.isArray(state.sleepwearDefaults) ? state.sleepwearDefaults : [];
+    rows = rows.filter(function (item) { return item && typeof item === "object"; });
+    return rows.map(function (item) {
+      return { name: str(item.name), desc: str(item.desc) };
+    });
+  }
+
   function renderWorldPanel() {
     renderWorldSetup();
     renderHomeSelectors();
     renderTravelChips();
     renderHomeRooms();
+    renderSleepwear();
     renderPathInputs();
     renderStayHomeInput();
     renderMinStayTable();
@@ -5291,6 +5379,36 @@
     }
   }
 
+  function renderSleepwear() {
+    var host = $("#w-sleepwear");
+    if (!host) return;
+    clear(host);
+    if (!state.sleepwearRows.length) state.sleepwearRows = [{ name: "", desc: "" }];
+    state.sleepwearRows.forEach(function (row, index) {
+      var wrap = el("div", "room-row");
+      var nameInput = inputText(row.name, "睡衣名字，例如：浅灰纯棉睡衣");
+      var textArea = document.createElement("textarea");
+      textArea.className = "input textarea";
+      textArea.rows = 4;
+      textArea.value = str(row.desc);
+      textArea.placeholder = "这套睡衣的款式描述（会直接用于生图提示词）：颜色、材质、版型、长度……只写衣服本身，动作和场景由动作库 / 场景库决定";
+      nameInput.addEventListener("input", function () { row.name = nameInput.value; markSettingsDirty(); });
+      textArea.addEventListener("input", function () { row.desc = textArea.value; markSettingsDirty(); });
+      var remove = el("button", "btn btn-ghost btn-mini btn-danger-text", "删除");
+      remove.type = "button";
+      remove.addEventListener("click", function () {
+        state.sleepwearRows.splice(index, 1);
+        if (!state.sleepwearRows.length) state.sleepwearRows.push({ name: "", desc: "" });
+        markSettingsDirty();
+        renderSleepwear();
+      });
+      wrap.appendChild(nameInput);
+      wrap.appendChild(textArea);
+      wrap.appendChild(remove);
+      host.appendChild(wrap);
+    });
+  }
+
   function renderPathInputs() {
     var host = $("#w-paths");
     if (!host) return;
@@ -5408,12 +5526,17 @@
     if (!city) { toast("家城市必须从城市表里选择", "err"); return; }
     var hasDistrict = (city.districts || []).some(function (d) { return d.name === homeDistrict; });
     if (!homeDistrict || !hasDistrict) { toast("家区县必须属于该城市，请重新选择", "err"); return; }
+    if (!state.sleepwearRows.some(function (row) { return str(row.desc).trim(); })) {
+      toast("夜间睡衣至少要留一套有描述的衣服", "err");
+      return;
+    }
     var payload = buildSettingsPayload({
       homeCity: homeCity,
       homeDistrict: homeDistrict,
       travel: (state.settings || {}).travel_cities,
       cityMinDays: (state.settings || {}).city_min_days,
       rooms: state.homeRoomRows,
+      sleepwear: state.sleepwearRows,
       probability: $("#w-stay-home") ? $("#w-stay-home").value : 0.5,
       paths: currentPathInputs(),
       cities: state.cities
@@ -5438,6 +5561,7 @@
         }
         state.settingsDirty = false;
         state.homeRoomRows = homeRoomsFromSettings();
+        state.sleepwearRows = sleepwearFromSettings();
         updateRevision();
         renderWorldPanel();
         setStatus($("#w-status"), "已保存世界设置", "ok");
@@ -6882,6 +7006,7 @@
     });
     var mainRaw = raw.main && typeof raw.main === "object" ? raw.main : {};
     var backupRaw = raw.backup && typeof raw.backup === "object" ? raw.backup : {};
+    var suyanRaw = raw.suyan && typeof raw.suyan === "object" ? raw.suyan : {};
     var conditions = (Array.isArray(raw.conditions) ? raw.conditions : [])
       .map(normalizeRefCondition)
       .filter(Boolean);
@@ -6910,6 +7035,11 @@
         single: backupRaw.single === undefined || backupRaw.single === null ? true : !!backupRaw.single,
         image: str(backupRaw.image),
         image2: str(backupRaw.image2)
+      },
+      /* 夜间素颜：22:00 到次日 07:00 在室内睡觉房间生效，图来自参考图页上传的素颜三视图 */
+      suyan: {
+        enabled: !!suyanRaw.enabled,
+        image: str(suyanRaw.image)
       },
       conditions: conditions,
       slots: slots,
@@ -6985,12 +7115,56 @@
     select.value = previous && values.indexOf(previous) !== -1 ? previous : values[0];
   }
 
-  /* 参考图页当前是否已经接管出图：有槽位图或条件参考图就算接管 */
-  function refLibraryConfigured() {
+  /* 生图测试的「睡衣」来源：直接取「世界设置 → 家 → 夜间睡衣」当前编辑中的列表，
+     只保留有描述的条目；值用列表下标，选中的名字/描述随请求一起发给后端 */
+  function sleepwearTestOptions() {
+    var rows = Array.isArray(state.sleepwearRows) ? state.sleepwearRows : [];
+    if (!rows.length) rows = sleepwearFromSettings();
+    var out = [];
+    rows.forEach(function (row) {
+      var desc = str(row && row.desc).trim();
+      if (!desc) return;
+      out.push({ name: str(row && row.name).trim() || desc.slice(0, 20), desc: desc });
+    });
+    return out;
+  }
+
+  function fillSleepwearSelect(select, preserve) {
+    if (!select) return;
+    var previous = preserve ? str(select.value) : "";
+    clear(select);
+    var options = sleepwearTestOptions();
+    state.testSleepwearOptions = options;
+    options.forEach(function (item, index) {
+      var option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = "#" + (index + 1) + " " + truncate(item.name, 44);
+      select.appendChild(option);
+    });
+    if (!options.length) {
+      var emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "（世界设置 → 家 里还没有睡衣）";
+      select.appendChild(emptyOption);
+      select.value = "";
+      select.disabled = true;
+      state.testSleepwearPick = null;
+      return;
+    }
+    select.disabled = false;
+    var values = options.map(function (item, index) { return String(index); });
+    var value = previous && values.indexOf(previous) !== -1 ? previous : values[0];
+    select.value = value;
+    var picked = parseInt(value, 10);
+    state.testSleepwearPick = isFinite(picked) ? (options[picked] || null) : null;
+  }
+
+  /* 参考图页当前是否已经接管出图：有槽位图或条件参考图就算接管 */  function refLibraryConfigured() {
     var lib = state.referenceLibrary;
     if (!lib) return false;
     if (str(lib.main.body) || str(lib.main.head)) return true;
     if (str(lib.backup.image) || str(lib.backup.image2)) return true;
+    if (lib.suyan && lib.suyan.enabled && str(lib.suyan.image)) return true;
     return Array.isArray(lib.conditions) && lib.conditions.length > 0;
   }
 
@@ -7002,6 +7176,7 @@
     if (str(lib.main.head)) parts.push("主站参考图2");
     if (str(lib.backup.image)) parts.push("副站参考图1");
     if (str(lib.backup.image2)) parts.push("副站参考图2");
+    if (lib.suyan && lib.suyan.enabled && str(lib.suyan.image)) parts.push("夜间素颜");
     var conds = Array.isArray(lib.conditions) ? lib.conditions : [];
     if (conds.length) parts.push("条件参考图 " + conds.length + " 条");
     return parts.length ? parts.join("、") : "还没配任何槽位";
@@ -7010,22 +7185,22 @@
   function renderRefTakeover() {
     var tag = $("#ref-state-tag");
     var text = $("#ref-state-text");
-    var btn = $("#ref-adopt");
-    if (!tag || !text || !btn) return;
+    if (!tag || !text) return;
     var lib = state.referenceLibrary;
-    var builtin = lib && lib.builtin ? lib.builtin : normalizeRefBuiltin(null);
-    var summary = builtin.summary || "插件内置参考图";
-    var live = refLibraryConfigured();
-    tag.textContent = live ? "已接管" : "未接管";
-    if (live) {
-      text.textContent = "出图用的就是下面槽位里的图：" + refTakeoverLabel() + "；想改回插件内置参考图，点右边的按钮覆盖";
-    } else if (builtin.available) {
-      text.textContent = "这一页还是空的，也就是没接管出图：现在生图照旧用插件内置参考图（" + summary + "），不填也完全不会影响生图；想换自己的图就在下面上传，想先把内置图填进来看看就点右边的按钮";
+    var filled = refSlotsFilled();
+    tag.textContent = filled ? "已填好" : "还没填参考图";
+    if (filled) {
+      text.textContent = "出图用的就是这些图：" + refTakeoverLabel() + "；想换就上传新图后在槽位里选它，再保存";
     } else {
-      text.textContent = "这一页还是空的，也就是没接管出图：现在生图照旧用插件内置参考图，不填也完全不会影响生图；这个版本没有可以一键填入的内置图，直接在下面上传就行";
+      text.textContent = "出图前必须在这里填好参考图：点下面「打开本地文件」上传，裁好后在主站 / 副站槽位里选它并保存。插件不内置默认形象，第一次用请先上传自己的角色参考图";
     }
-    btn.textContent = live ? "用内置参考图覆盖" : "填入内置参考图";
-    btn.hidden = !builtin.available;
+  }
+
+  /* 主站或副站至少填了一张图，出图才有参考图可用 */
+  function refSlotsFilled() {
+    var lib = state.referenceLibrary;
+    if (!lib) return false;
+    return !!(str(lib.main.body) || str(lib.main.head) || str(lib.backup.image));
   }
 
   async function handleAdoptBuiltin(btn) {
@@ -7036,7 +7211,7 @@
     if (refLibraryConfigured()) {
       var confirmed = await openModal({
         title: "用内置参考图覆盖",
-        body: "会把主站/副站的槽位换成插件内置参考图（" + summary + "）；已经上传的图片不会删除，条件参考图也不会动",
+        body: "会把主站/副站的槽位换成插件内置参考图（" + summary + "），并把内置素颜 / 冬装参考图导进图片墙（夜间素颜的启用开关保持你当前的选择）；已经上传的图片不会删除，条件参考图也不会动",
         okText: "覆盖",
         cancelText: "算了"
       });
@@ -7058,11 +7233,13 @@
   function refSlotImageId(group, slot) {
     var lib = state.referenceLibrary;
     if (!lib) return "";
+    if (group === "suyan") return str(lib.suyan && lib.suyan.image);
     if (group === "main") return slot === "main2" ? str(lib.main.head) : str(lib.main.body);
     return slot === "backup2" ? str(lib.backup.image2) : str(lib.backup.image);
   }
 
   function refSlotLabel(slot) {
+    if (slot === "suyan") return "素颜三视图";
     var lib = state.referenceLibrary;
     var list = lib && Array.isArray(lib.slots) ? lib.slots : [];
     for (var i = 0; i < list.length; i++) {
@@ -7082,6 +7259,7 @@
   }
 
   function refTargetShortLabel(slot) {
+    if (slot === "suyan") return "素颜三视图";
     var lib = state.referenceLibrary;
     var list = refTargetGroups(lib);
     for (var i = 0; i < list.length; i++) {
@@ -7383,10 +7561,18 @@
         setStatus($("#ref-status"), "图片已上传，但没拿到图片 id；请在上面点「上传/更换」再试一次", "warn");
         return;
       }
+      /* 素颜槽位：在这里上传就等于要启用，勾选框顺手打上 */
+      if (target.group === "suyan") {
+        state.referenceLibrary.suyan.enabled = true;
+        state.referenceLibrary.suyan.image = imageId;
+      }
       try {
         var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayloadWithSlot(target.group, target.slot, imageId)));
         applyRefLibrary(snapshot);
         setStatus($("#ref-status"), "已上传并设为" + refTargetShortLabel(target.slot), "ok");
+        if (target.group === "suyan") {
+          setStatus($("#ref-suyan-status"), "已上传素颜三视图并启用素颜", "ok");
+        }
       } catch (err) {
         setStatus($("#ref-status"), "图片已上传，但写入槽位失败：" + normalizeError(err), "err");
       }
@@ -7399,12 +7585,17 @@
     var lib = state.referenceLibrary || normalizeReferenceLibrary(null);
     return {
       main: { dual: !!lib.main.dual, body: str(lib.main.body), head: str(lib.main.head) },
-      backup: { enabled: !!lib.backup.enabled, single: !!lib.backup.single, image: str(lib.backup.image), image2: str(lib.backup.image2) }
+      backup: { enabled: !!lib.backup.enabled, single: !!lib.backup.single, image: str(lib.backup.image), image2: str(lib.backup.image2) },
+      suyan: { enabled: !!(lib.suyan && lib.suyan.enabled), image: str(lib.suyan && lib.suyan.image) }
     };
   }
 
   function refSlotsPayloadWithSlot(group, slot, imageId) {
     var payload = refSlotsPayload();
+    if (group === "suyan") {
+      payload.suyan.image = str(imageId);
+      return payload;
+    }
     if (group === "main") {
       if (slot === "main2") payload.main.head = str(imageId);
       else payload.main.body = str(imageId);
@@ -7432,11 +7623,12 @@
       body.appendChild(el("div", "ref-slot-empty", "未设置"));
     }
     var actions = el("div", "ref-slot-actions");
-    var pick = el("button", "btn btn-ghost btn-mini", "上传/更换");
+    var pick = el("button", "btn btn-ghost btn-mini", group === "suyan" ? "上传素颜三视图" : "上传/更换");
     pick.type = "button";
     pick.disabled = !!disabled;
     pick.addEventListener("click", function () {
-      triggerRefFile({ group: group, slot: slot, role: group === "backup" ? "backup" : "main" }, pick);
+      var role = group === "backup" ? "backup" : group === "suyan" ? "extra" : "main";
+      triggerRefFile({ group: group, slot: slot, role: role }, pick);
     });
     actions.appendChild(pick);
     var remove = el("button", "btn btn-ghost btn-mini", "清除");
@@ -7477,6 +7669,14 @@
     }
     var backupWrap = $("#ref-backup-wrap");
     if (backupWrap) backupWrap.hidden = !lib.backup.enabled;
+    /* 夜间素颜：勾选框 + 一张素颜三视图槽位（启用时必须上传） */
+    var suyanBox = $("#ref-suyan-enabled");
+    if (suyanBox) suyanBox.checked = !!(lib.suyan && lib.suyan.enabled);
+    var suyanHost = $("#ref-suyan-slots");
+    if (suyanHost) {
+      clear(suyanHost);
+      suyanHost.appendChild(refSlotCard("suyan", "suyan", false));
+    }
   }
 
   async function clearRefSlot(group, slot, btn) {
@@ -7494,6 +7694,7 @@
     await exclusive("refs", btn, async function () {
       setStatus($("#ref-slot-status"), "保存中…", "run");
       try {
+        if (group === "suyan") state.referenceLibrary.suyan.enabled = false;
         var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayloadWithSlot(group, slot, "")));
         applyRefLibrary(snapshot);
         setStatus($("#ref-slot-status"), "已清除" + refTargetShortLabel(slot), "ok");
@@ -7513,10 +7714,33 @@
       try {
         var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayload()));
         applyRefLibrary(snapshot);
-        setStatus($("#ref-slot-status"), "主站/副站参考图设置已保存", "ok");
-        toast("主站/副站参考图设置已保存", "ok");
+        setStatus($("#ref-slot-status"), "主站/副站/素颜参考图设置已保存", "ok");
+        toast("主站/副站/素颜参考图设置已保存", "ok");
       } catch (err) {
         setStatus($("#ref-slot-status"), "保存失败：" + normalizeError(err), "err");
+        toast(normalizeError(err), "err");
+      }
+    });
+  }
+
+  async function handleSaveRefSuyan(btn) {
+    var lib = state.referenceLibrary;
+    if (!lib) { toast("参考图还没加载完成", "warn"); return; }
+    if (lib.suyan.enabled && !str(lib.suyan.image)) {
+      setStatus($("#ref-suyan-status"), "启用素颜要先上传一张素颜三视图照片", "err");
+      toast("启用素颜要先上传一张素颜三视图照片", "err");
+      return;
+    }
+    await exclusive("refs", btn, async function () {
+      setStatus($("#ref-suyan-status"), "保存中…", "run");
+      try {
+        var snapshot = await api(Object.assign({ action: "save_ref_slots" }, refSlotsPayload()));
+        applyRefLibrary(snapshot);
+        setStatus($("#ref-suyan-status"),
+          lib.suyan.enabled ? "已启用素颜（22:00 到次日 07:00 生效）" : "已关闭素颜", "ok");
+        toast(lib.suyan.enabled ? "素颜参考图已启用" : "素颜参考图已关闭", "ok");
+      } catch (err) {
+        setStatus($("#ref-suyan-status"), "保存失败：" + normalizeError(err), "err");
         toast(normalizeError(err), "err");
       }
     });
@@ -7532,6 +7756,7 @@
     if (str(lib.main.head) === id) tags.push("槽位 主站参考图2");
     if (str(lib.backup.image) === id) tags.push("槽位 副站参考图1");
     if (str(lib.backup.image2) === id) tags.push("槽位 副站参考图2");
+    if (lib.suyan && str(lib.suyan.image) === id) tags.push("夜间素颜参考图");
     (lib.conditions || []).forEach(function (cond) {
       var label = str(cond.label) || str(cond.id) || "未命名";
       var images = cond.images || {};
@@ -8131,6 +8356,10 @@
         var index = parseInt(eventCostume.value, 10);
         var item = state.testEventOutfits[index];
         state.testEventCostume = item ? { name: str(item.name), desc: str(item.desc) } : null;
+      } else if (state.testCostumeSource === "sleepwear") {
+        var sleepwearIndex = parseInt(eventCostume.value, 10);
+        state.testSleepwearPick = isFinite(sleepwearIndex)
+          ? (state.testSleepwearOptions[sleepwearIndex] || null) : null;
       }
       refreshTestAvailability();
     });
@@ -8150,7 +8379,8 @@
     var costumeSource = $("#t-costume-source");
     if (costumeSource) costumeSource.addEventListener("change", function () {
       state.testCostumeSource = costumeSource.value === "event" ? "event"
-        : costumeSource.value === "ref" ? "ref" : "daily";
+        : costumeSource.value === "ref" ? "ref"
+        : costumeSource.value === "sleepwear" ? "sleepwear" : "daily";
       state.testEventCostume = null;
       syncTestPanel();
     });
@@ -8251,6 +8481,15 @@
     });
     var roomDefaults = $("#w-room-defaults");
     if (roomDefaults) roomDefaults.addEventListener("click", function () { applyHomeRoomDefaults(); });
+    var sleepwearAdd = $("#w-sleepwear-add");
+    if (sleepwearAdd) sleepwearAdd.addEventListener("click", function () {
+      state.sleepwearRows.push({ name: "", desc: "" });
+      markSettingsDirty();
+      renderSleepwear();
+      var rows = $all("#w-sleepwear .room-row");
+      var last = rows[rows.length - 1];
+      if (last) last.scrollIntoView({ block: "nearest" });
+    });
     var stayHome = $("#w-stay-home");
     if (stayHome) stayHome.addEventListener("input", function () {
       if (!state.settings) state.settings = {};
@@ -8354,9 +8593,20 @@
       setStatus($("#ref-slot-status"), "勾选已改；点「保存主站/副站设置」才写入", "warn");
     });
     var refSaveSlots = $("#ref-save-slots");
-    var refAdopt = $("#ref-adopt");
-    if (refAdopt) refAdopt.addEventListener("click", function () { handleAdoptBuiltin(refAdopt); });
+    var refSaveSuyan = $("#ref-save-suyan");
     if (refSaveSlots) refSaveSlots.addEventListener("click", function () { handleSaveRefSlots(refSaveSlots); });
+    if (refSaveSuyan) refSaveSuyan.addEventListener("click", function () { handleSaveRefSuyan(refSaveSuyan); });
+    var refSuyanBox = $("#ref-suyan-enabled");
+    if (refSuyanBox) refSuyanBox.addEventListener("change", function () {
+      if (!state.referenceLibrary) return;
+      state.referenceLibrary.suyan.enabled = !!refSuyanBox.checked;
+      if (refSuyanBox.checked && !str(state.referenceLibrary.suyan.image)) {
+        setStatus($("#ref-suyan-status"), "启用素颜要先上传一张素颜三视图照片", "warn");
+      } else {
+        setStatus($("#ref-suyan-status"), "勾选已改；点「保存素颜设置」才写入", "warn");
+      }
+      refreshTestAvailability();
+    });
     var refCondAdd = $("#ref-cond-add");
     if (refCondAdd) refCondAdd.addEventListener("click", addRefCondition);
     var refCondSave = $("#ref-cond-save");

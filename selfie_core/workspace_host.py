@@ -146,10 +146,23 @@ class WorkspaceHostMixin:
         """Explicit paid preview. Do not mutate world, photo memory, or user quotas."""
         if payload.get('confirm_paid') is not True:
             raise ValueError('请确认本次测试会调用生图服务')
-        # 测试面板的「素颜」勾选：勾上就强制用卸妆脸参考图，不用等 22 点
+        # 测试面板的「素颜」勾选：勾上就强制用参考图页启用并上传的那张素颜三视图，
+        # 不用等到 22 点；参考图页没启用时直接告诉用户去启用，不静默忽略。
         bare_face = payload.get('bare_face', False)
         if type(bare_face) is not bool:
             raise ValueError('素颜选项格式无效')
+        if bare_face:
+            try:
+                realistic = self._style() == 'realistic'
+            except Exception:
+                realistic = True
+            if realistic:
+                suyan = getattr(self, '_ref_sleep_face_image', None)
+                path = suyan() if callable(suyan) else ''
+                if not path:
+                    raise ValueError(
+                        '参考图页还没有启用素颜：请到「参考图」页勾上「启用素颜」'
+                        '并上传一张素颜三视图')
         from .materials import MaterialStore
         settings = self._workspace_settings()
         paths = {kind: settings[key] for kind, key in (

@@ -212,11 +212,10 @@ class ImageTransportMixin:
           按站点张数上限截断，不再自动补图。
         - 换装（head_only）：衣服由提示词决定，参考图只贴头部——多图站点贴
           「正脸 + 侧头」，单图站点只贴正脸；不再自动补全身照或脸部特写。
-        - 多图站点：主参考图 + 脸部参考图（真人风格）；cos 双图时脸让位给角色图。
+        - 多图站点：主参考图 + 脸部参考图；cos 双图时脸让位给角色图。
         - 单图站点（副站只吃 1 张）：
           · 睡觉房间优先贴素颜三视图（face_ref），夜里卸妆的脸最重要；
-          · 其它时候贴 single_ref（冬装 = 脸部正面 + 冬装正面的拼接照），
-            没有再用 ref 或原来的自动参考图。
+          · 其它时候贴 single_ref，没有再用 ref。
         """
         extra = [x for x in (extra_images or []) if x]
         explicit = [str(x) for x in (refs or ()) if x]
@@ -231,11 +230,11 @@ class ImageTransportMixin:
         if max_refs < 2:
             if face_ref:
                 return face_ref, ""
-            return (single_ref or ref or self._pick_ref(style, single=True)), ""
-        primary = ref or self._pick_ref(style, single=False)
+            return (single_ref or ref or ""), ""
+        primary = ref or ""
         face = ""
         if not (extra and primary):
-            face = face_ref or self._face_ref(style)
+            face = face_ref or ""
         return primary, face
 
     async def _generate_openai(self, prompt: str, model: str,
@@ -334,7 +333,7 @@ class ImageTransportMixin:
                             )
                 else:
                     if not self._allow_text_only():
-                        raise RuntimeError("当前角色缺少有效参考图；已禁止无参考图生成，请配置角色身体/头部参考图")
+                        raise RuntimeError("还没有可用的参考图：请打开插件页「自拍工作台 → 参考图」，上传并填好主站 / 副站参考图，再回来拍照")
                     status, data = await post_generations()
                     mode = "generations"
                 if status == 200:

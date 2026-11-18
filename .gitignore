@@ -42,30 +42,6 @@ config.private.json
 *.key
 *.pem
 
-# Personal reference assets (text/source assets remain visible)
-/assets/**/[Rr][Ee][Ff]*
-/assets/**/*.[Pp][Nn][Gg]
-/assets/**/*.[Jj][Pp][Gg]
-/assets/**/*.[Jj][Pp][Ee][Gg]
-/assets/**/*.[Ww][Ee][Bb][Pp]
-/assets/**/*.[Gg][Ii][Ff]
-/assets/**/*.[Bb][Mm][Pp]
-/assets/**/*.[Tt][Ii][Ff]
-/assets/**/*.[Tt][Ii][Ff][Ff]
-/assets/**/*.[Aa][Vv][Ii][Ff]
-/assets/**/*.[Hh][Ee][Ii][Cc]
-
-# Built-in references shipped with the plugin under the MIT license.
-# Any newly added personal reference image stays ignored unless listed here.
-!/assets/ref_front_9x16.png
-!/assets/ref_real_front_9x16.png
-!/assets/ref_real_face.png
-!/assets/ref_real_faceandbody.png
-# 素颜 / 冬装参考图（夜间与低温日替换用，随内置角色一起发布）
-!/assets/ref_suyan.png
-!/assets/ref_winter.png
-!/assets/ref_winter_single.png
-
 # Backup archives must not be published
 *.zip
 *.7z

@@ -15,13 +15,13 @@
     "type": "string",
     "default": "",
     "description": "生图副站地址",
-    "hint": "可选副站的 OpenAI 兼容 API 根地址。主站模型链失败后尝试；留空不启用副站。"
+    "hint": "可选副站地址（推荐配置，主站失败/限流时自动改用副站，不配也能用）。主站模型链全部失败后才会试副站。"
   },
   "api_key_backup": {
     "type": "string",
     "default": "",
     "description": "生图副站密钥",
-    "hint": "副站 API 密钥，与副站地址配套填写；不使用副站时留空。"
+    "hint": "副站密钥，与副站地址配套填写；不配置副站时留空，不影响使用。"
   },
   "model": {
     "type": "string",
@@ -63,79 +63,7 @@
     "type": "string",
     "default": "",
     "description": "角色名字",
-    "hint": "当前唯一角色的名字。角色字段全部留空时兼容旧角色；任一角色字段非空即使用自定义角色，不再回退旧角色图片。"
-  },
-  "character_aliases": {
-    "type": "list",
-    "default": [],
-    "description": "角色别名",
-    "hint": "当前角色的称呼别名。"
-  },
-  "character_description": {
-    "type": "string",
-    "default": "",
-    "description": "角色设定",
-    "hint": "原创角色身份和外观描述；与上传的角色参考图一致，不填写旧角色的人设。"
-  },
-  "character_hair": {
-    "type": "string",
-    "default": "",
-    "description": "发型与发色",
-    "hint": "角色发型与发色；留空遵循当前角色参考图。"
-  },
-  "character_default_outfit": {
-    "type": "string",
-    "default": "",
-    "description": "默认服装",
-    "hint": "自定义角色默认服装；留空保留身体参考图的服装。"
-  },
-  "character_default_hat": {
-    "type": "string",
-    "default": "",
-    "description": "默认头饰",
-    "hint": "自定义角色默认头饰或帽子。"
-  },
-  "character_voice": {
-    "type": "string",
-    "default": "",
-    "description": "说话风格",
-    "hint": "角色接单与日常文案的说话风格。"
-  },
-  "character_reference_body": {
-    "type": "string",
-    "default": "",
-    "description": "身体参考图",
-    "hint": "当前原创角色身体参考图路径；绝对路径或相对插件目录的路径。只供管理员配置，不是公开文件上传API。"
-  },
-  "character_reference_head": {
-    "type": "string",
-    "default": "",
-    "description": "头部参考图",
-    "hint": "当前原创角色头部参考图路径；与身体图属于同一角色。"
-  },
-  "character_reference_single": {
-    "type": "string",
-    "default": "",
-    "description": "单图合成参考",
-    "hint": "单图服务使用的身体与头部合成参考图路径。留空先尝试身体参考图。"
-  },
-  "outfit_sleepwear": {
-    "type": "string",
-    "default": "",
-    "description": "夜间睡衣",
-    "hint": "自定义角色夜间家居服。留空使用通用不透明长袖睡衣长裤；不改变旧角色睡衣策略。"
-  },
-  "outfit_schoolwear": {
-    "type": "string",
-    "default": "",
-    "description": "学校服装",
-    "hint": "自定义角色学校场景服装；留空保留角色默认服装，不强制套用JK。"
-  },
-  "outfit_winterwear": {
-    "type": "string",
-    "default": "",
-    "description": "冬季服装",
-    "hint": "自定义角色寒冷室外服装；留空用通用保暖外套长裤。"
+    "hint": "角色的名字，只用于称呼、群聊里叫她和照片记忆的归属，不描述长相。长相、发型、衣服全部以「参考图」页上传的图片为准。"
   },
   "admins_id": {
     "type": "list",
@@ -167,83 +95,17 @@
     "description": "接单（咔嚓）拟声词",
     "hint": "拟人化模式下，接单回复的第一句话末尾是否加「（咔嚓）」作为接单标志；关掉就只正常回应，不加拟声词，接单照样生效"
   },
-  "role_has_hat": {
-    "type": "bool",
-    "default": false,
-    "description": "角色有帽子",
-    "hint": "角色本身有帽子时才打开。打开后生图测试的「日常服装」里会多出「脱帽经典 / 无帽无外套经典」两档；没有帽子的角色保持关闭，免得选项没用"
-  },
-  "role_has_outer": {
-    "type": "bool",
-    "default": false,
-    "description": "角色有外套",
-    "hint": "角色本身穿外套（外层衣物）时才打开。打开后「日常服装」里会多出「脱外套经典 / 无帽无外套经典」两档；没有外套的角色保持关闭"
-  },
   "allow_text_only": {
     "type": "bool",
     "default": false,
     "description": "允许无图生成",
     "hint": "是否允许纯文生图兜底。默认关闭 —— 没有参考图时生成的图和她的长相完全不像，宁可报错也不要发一张不像的。只有找不到参考图或接口不支持 edits 时才会用到"
   },
-  "custom_qzone_enabled": {
-    "type": "bool",
-    "default": false,
-    "description": "允许公开发空间",
-    "hint": "明确允许自定义角色发布QQ空间照片。默认关闭，旧角色原有发布策略不变；开启会调用付费生成并公开图片。"
-  },
   "qzone_model": {
     "type": "string",
     "default": "gpt-image-2.5-flare",
     "description": "空间配图模型",
     "hint": "QQ 空间配图用的模型，默认和自拍一致（同样贴三视图）"
-  },
-  "ref_image": {
-    "type": "string",
-    "default": "",
-    "description": "内置动漫参考图",
-    "hint": "使用插件自带角色（自定义角色字段全部留空）时的二次元版参考图路径，仅编辑模型使用。留空自动用 assets/ref_front_9x16.png（二次元三视图裁出的 9:16 正面图）；填写了任一自定义角色字段后本项不生效"
-  },
-  "ref_image_real": {
-    "type": "string",
-    "default": "",
-    "description": "内置真人参考图",
-    "hint": "使用插件自带角色时的真人版参考图路径（仅编辑模型用）。留空自动用 assets/ref_real_front_9x16.png（真人三视图裁出的 9:16 正面图），并自动追加 assets/ref_real_face.png 脸部特写强化五官；填写了自定义角色后本项不生效"
-  },
-  "ref_image_real_single": {
-    "type": "string",
-    "default": "",
-    "description": "内置单图参考",
-    "hint": "单图模式（副站只吃 1 张参考图）专用的真人参考图。留空自动用 assets/ref_real_faceandbody.png（身体和脸在同一张）；填写了自定义角色后本项不生效"
-  },
-  "ref_swap_enabled": {
-    "type": "bool",
-    "default": true,
-    "description": "素颜/冬装参考图",
-    "hint": "默认打开（只对写实风格生效）。开启后按两个条件替换参考图：①22:00 之后在室内睡觉房间（家或旅店的床、青旅床位；网吧包厢、洗浴休息厅和事件场景不算）时，脸部参考图换成素颜三视图，夜里卸妆后的样子更自然；②每天早上 7 点用所在城市的当日平均气温判一次，低于阈值就全天使用冬装人物参考图，当天跨城旅行也沿用早上那次判定。开启后原来「冬天在提示词里加羽绒服/围巾」的写法自动关闭，衣服以参考图为准；换装、事件服装、睡衣和节假日套装仍以提示词为准。自定义角色要自己配下面两张图，否则这条不会生效。"
-  },
-  "ref_swap_temp": {
-    "type": "int",
-    "default": 10,
-    "description": "冬装气温阈值",
-    "hint": "每天早上 7 点查所在城市的当日平均气温（Open-Meteo），低于这个温度就全天换冬装参考图。默认 10℃。"
-  },
-  "ref_swap_face_image": {
-    "type": "string",
-    "default": "",
-    "description": "素颜脸部参考图",
-    "hint": "晚上睡觉房间用的素颜脸部参考图路径（绝对路径或相对插件目录）。留空时内置角色用自带的 assets/ref_suyan.png；自定义角色请填自己的素颜图，留空则不启用这一条（不会借用内置角色的图）。"
-  },
-  "ref_swap_winter_image": {
-    "type": "string",
-    "default": "",
-    "description": "冬装人物参考图",
-    "hint": "低温日全天使用的人物参考图路径（冬装三视图，正/侧/背一图即可）。留空时内置角色用自带的 assets/ref_winter.png；自定义角色请填自己的冬装图，留空则不启用这一条（不会借用内置角色的图）。"
-  },
-  "ref_swap_winter_single_image": {
-    "type": "string",
-    "default": "",
-    "description": "冬装单图参考",
-    "hint": "单图站点（副站只吃 1 张参考图）用的冬装参考图：把「原脸部正面照」和「冬装正面」拼成一张。留空时内置角色用自带的 assets/ref_winter_single.png；自定义角色留空则退回用上面的冬装人物参考图。"
   },
   "selfie_probability": {
     "type": "float",
@@ -290,6 +152,12 @@
     "default": "",
     "description": "角色搜索提示",
     "hint": "（可选）角色搜索补充说明，比如填「优先用日文名搜索」；一般留空即可"
+  },
+  "cos_hair_from_character": {
+    "type": "bool",
+    "default": true,
+    "description": "cos 连头发一起换",
+    "hint": "开启后 cosplay 照片的头发颜色、发型和长度跟 cos 角色走，不再用她自己参考图里的头发，脸仍然是她自己的；关掉则只换角色的服装和配饰，头发保持她自己参考图里的样子"
   },
   "closeup_enabled": {
     "type": "bool",

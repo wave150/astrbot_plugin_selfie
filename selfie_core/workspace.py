@@ -25,6 +25,7 @@ from .living import validate_event, LivingEngine
 from .event_materials import migrate_event, normalize_phase_name, resolve_event
 from .overnight import overnight_list
 from .meal import MEAL_SETUPS, meal_cue
+from .defaults import SLEEPWEAR_SETS
 from .sleep import SLEEP_KINDS, sleep_cue
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,10 @@ HOME_ROOMS = {
         "角落还有一个收纳篮和折叠晾衣架，光线明亮，是家里晒太阳和晾衣服的地方。"
     ),
 }
+# 夜间睡衣默认几套：世界设置 → 家里的「夜间睡衣」列表，用户可增删改。
+# 内置的几套（包括兜底那套）全部放进默认列表：老实例打开世界设置就能看到并编辑，
+# 而不是只在代码里随机。
+DEFAULT_SLEEPWEAR = [deepcopy(item) for item in SLEEPWEAR_SETS]
 OLD_HOME_ROOMS = {"厨房": "家里的厨房，灶台和料理台整洁", "餐厅": "家里的餐厅，餐桌与座椅",
                   "客厅": "家里的客厅，沙发与茶几", "卧室": "家里的卧室，床铺与衣柜",
                   "书房": "家里的书房，书桌和书架", "阳台": "家里的阳台，绿植和休闲座椅"}
@@ -314,7 +319,8 @@ class WorkspaceService:
             settings["home_district"] = settings.get("home_district") or ""
             if settings.get("travel_cities") is None:
                 settings["travel_cities"] = []
-            settings.update(city_min_days={}, home_rooms=deepcopy(HOME_ROOMS), stay_home_probability=0.5)
+            settings.update(city_min_days={}, home_rooms=deepcopy(HOME_ROOMS),
+                        sleepwear=deepcopy(DEFAULT_SLEEPWEAR), stay_home_probability=0.5)
             self._document = {"version": 1, "revision": 1, "settings": settings,
                               "cities": {}, "events": [], "event_history": [],
                               "migration": {"opaque_event_ids": {}, "event_libraries_v1": time.time(),
@@ -803,9 +809,10 @@ class WorkspaceService:
     async def _test(self, payload):
         """Paid preview: scene mode and costume/action sources are independent.
 
-        场景可以是日常/事件/居家/过夜；服装和动作各自可以取「日常素材库」或
-        「某个事件的素材」。来源显式写在 payload 里，缺省时事件场景仍沿用事件
-        素材，其它场景沿用日常素材，保持旧前端的调用方式可用。
+        场景可以是日常/事件/居家/过夜；服装和动作各自可以取「日常素材库」「某个
+        事件的素材」「参考图衣服」或「世界设置 → 家」里的睡衣。来源显式写在 payload
+        里，缺省时事件场景仍沿用事件素材，其它场景沿用日常素材，保持旧前端的调用
+        方式可用。
         """
         mode = payload.get("mode", "daily")
         if mode not in ("daily", "event", "home", "overnight"):
@@ -813,7 +820,7 @@ class WorkspaceService:
         default_source = "event" if mode == "event" else "daily"
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
-        if costume_source not in ("daily", "event", "ref") or action_source not in (
+        if costume_source not in ("daily", "event", "ref", "sleepwear") or action_source not in (
                 "daily", "event", "meal", "sleep", "selfie", "interaction"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
@@ -850,6 +857,19 @@ class WorkspaceService:
                 costume_override = request["costume"]
             if costume_override is None:
                 raise WorkspaceError("请选择事件服装")
+        elif costume_source == "sleepwear":
+            # 睡衣：直接取「世界设置 → 家 → 夜间睡衣」里的那一套（名字 + 款式描述），
+            # 没有素材库编号；前端连同列表一起带过来，未保存的编辑也能先试拍。
+            submitted = payload.get("sleepwear")
+            if not isinstance(submitted, dict):
+                raise WorkspaceError("请选择睡衣")
+            name = str(submitted.get("name") or "").strip()
+            desc = str(submitted.get("desc") or "").strip()
+            if not desc:
+                raise WorkspaceError("请选择睡衣")
+            if len(name) > 40 or len(desc) > 2000:
+                raise WorkspaceError("睡衣描述过长")
+            costume_override = {"name": name or desc[:20], "desc": desc}
         elif ref_outfit is not None:
             # 这套衣服挂在参考图上（工作台给参考图起了衣服名字），没有素材库编号
             pass
@@ -1019,7 +1039,8 @@ class WorkspaceService:
     def _validate_settings(self, settings):
         if not isinstance(settings, dict):
             raise ValueError("settings must be an object")
-        allowed = set(_MIGRATE) | {"city_min_days", "home_rooms", "stay_home_probability"}
+        allowed = set(_MIGRATE) | {"city_min_days", "home_rooms", "sleepwear",
+                                   "stay_home_probability"}
         if set(settings) - allowed:
             raise ValueError("unsupported workspace setting")
         merged = self.settings()
@@ -1048,6 +1069,25 @@ class WorkspaceService:
                     isinstance(v, str) or isinstance(v, dict) and set(v) == {"desc"} and isinstance(v["desc"], str))
                 for k, v in rooms.items()):
             raise ValueError("home_rooms must map room names to descriptions or {desc: text}")
+        sleepwear = merged.get("sleepwear")
+        if sleepwear is None:
+            # 老实例还没有「夜间睡衣」设置：不强制迁移，第一次保存设置时写入默认库
+            sleepwear = deepcopy(DEFAULT_SLEEPWEAR)
+            merged["sleepwear"] = sleepwear
+        if not isinstance(sleepwear, list) or not 1 <= len(sleepwear) <= 20:
+            raise ValueError("sleepwear must be a list of 1-20 outfits")
+        cleaned_sleepwear = []
+        for item in sleepwear:
+            if not isinstance(item, dict):
+                raise ValueError("sleepwear entries must be objects")
+            name = str(item.get("name") or "").strip()
+            desc = str(item.get("desc") or "").strip()
+            if not desc:
+                raise ValueError("sleepwear entry requires desc")
+            if len(name) > 40 or len(desc) > 2000:
+                raise ValueError("sleepwear entry too long")
+            cleaned_sleepwear.append({"name": name, "desc": desc})
+        merged["sleepwear"] = cleaned_sleepwear
         probability = merged.get("stay_home_probability")
         if isinstance(probability, bool) or not isinstance(probability, (int, float)) or not math.isfinite(probability) or not 0 <= probability <= 1:
             raise ValueError("stay_home_probability must be between 0 and 1")
@@ -1110,6 +1150,7 @@ class WorkspaceService:
                         "cities": cities, "settings": settings, "events": events,
                         "event_history": self.event_history(),
                         "home_room_defaults": deepcopy(HOME_ROOMS),
+        "sleepwear_defaults": deepcopy(DEFAULT_SLEEPWEAR),
                         "overnight_scenes": overnight_list(),
                         "reference_library": workspace_refs.with_builtin(
                             self, self.reference_library().snapshot()),

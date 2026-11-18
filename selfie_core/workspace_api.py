@@ -24,7 +24,7 @@ _ACTIONS = frozenset({"bootstrap", "test", "try_costume", "draft_material", "con
                       "diaries", "schedule", "job", "cancel_job",
                       "ref_library", "save_ref_image", "delete_ref_image", "rename_ref_image",
                       "save_ref_slots", "save_ref_conditions", "ref_image",
-                      "adopt_builtin_refs", "save_ref_costume"})
+                      "save_ref_costume"})
 _BACKGROUND = frozenset({"test", "try_costume", "draft_material", "draft_city", "initialize_world",
                          "generate_event_fragment"})
 # Process-level admission, including overlapping plugin instances during reload.
@@ -86,6 +86,8 @@ _SAFE_MESSAGES = frozenset({
     "请选择参考图衣服",
     "参考图衣服只能在「参考图衣服」或「日常服装」来源里用",
     "参考图衣服格式无效，请刷新页面后重试",
+    "参考图页还没有启用素颜：请到「参考图」页勾上「启用素颜」并上传一张素颜三视图",
+    "还没有可用的参考图：请打开插件页「自拍工作台 → 参考图」，上传并填好主站 / 副站参考图，再回来拍照",
     "这套参考图衣服已经没有名字了，请刷新页面后重新选择",
     "这套衣服没有勾「可摘帽子」，请刷新页面后重试",
     "这套衣服没有勾「可脱外套」，请刷新页面后重试",

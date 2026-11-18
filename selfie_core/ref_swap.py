@@ -1,17 +1,13 @@
-"""参考图替换规则：夜里睡觉房间用素颜脸，低温日全天用冬装参考图。
+"""参考图替换规则：夜里在睡觉房间时，脸部参考图换成参考图页上传的素颜三视图。
 
-纯函数模块：当前时间、当天气温判定结果和图片路径都由调用方传进来；这里
-不读文件、不查网络、不写状态，方便单测。
+纯函数模块：当前时间、场景和图片路径都由调用方传进来；这里不读文件、不查网络、
+不写状态，方便单测。规则来自用户需求：**素颜时间为 22:00 到次日 07:00**，
+只在室内睡觉房间（家 / 旅店的床、青旅床位）生效；网吧包厢、洗浴休息厅这类
+过夜点不算，事件场景也不算。
 
-规则来自用户需求：
-- 22:00 之后在室内睡觉房间（家/旅店的床、青旅床位）时，脸部参考图换成
-  卸妆后的素颜三视图；网吧包厢、洗浴休息厅这类过夜点不算，事件场景不算。
-- 每天早上 7 点用所在城市的当日平均气温判一次：低于阈值就全天用冬装
-  人物参考图；当天跨城旅行也沿用早上那次判定（判定按「日期」缓存，不再按
-  当时所在城市重判）。
+冬装不再按气温自动换图：想「降温就换整套冬装」，去工作台「参考图」页上传冬装
+参考图，加一条「当日平均气温低于 x℃」的条件参考图即可。
 """
-import math
-
 from .overnight import OVERNIGHT_SCENES
 from .portraits import scene_is_event
 from .scene_context import scene_hour
@@ -88,33 +84,3 @@ def bare_face_active(scene, hour=None) -> bool:
     if is_cybercafe(scene) or scene_is_event(scene):
         return False
     return is_night(scene, hour)
-
-
-def winter_decision(mean, threshold=10.0):
-    """当日平均气温低于阈值 → 今天换冬装参考图；气温不可用返回 None。
-
-    不把「查不到气温」当成 0℃，避免网络失败时误穿冬装；调用方据此保留
-    原来的羽绒服提示词兜底。
-    """
-    if isinstance(mean, bool) or not isinstance(mean, (int, float)):
-        return None
-    try:
-        value = float(mean)
-    except (OverflowError, ValueError):
-        return None
-    if not math.isfinite(value):
-        return None
-    try:
-        limit = float(threshold)
-    except (TypeError, ValueError):
-        limit = 10.0
-    return value < limit
-
-
-def winter_active(record, today) -> bool:
-    """今天（按中国本地日期）的判定是不是「穿冬装参考图」。"""
-    if not isinstance(record, dict):
-        return False
-    if str(record.get("date") or "") != str(today or ""):
-        return False
-    return record.get("winter") is True

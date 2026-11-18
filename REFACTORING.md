@@ -8,7 +8,7 @@
 | --- | --- |
 | [主入口](<main.py>) | AstrBot 命令与生命周期适配、业务编排、状态宿主、用户交互等仍保留较多逻辑；不是无业务逻辑的纯适配器。 |
 | [默认预设](<selfie_core/defaults.py>) | 保留旧角色与世界预设以兼容旧配置，不等于所有预设已改成外部数据文件。 |
-| [角色配置](<selfie_core/character.py>)、[自定义画像](<selfie_core/portraits.py>) | 单个活动角色的配置快照、参考图路径选择、自定义提示词构造。没有多角色同时切换 UI。 |
+| [角色配置](<selfie_core/character.py>)、[场景/服装规则](<selfie_core/portraits.py>) | 只剩「角色名字」；长相、发型、衣服全部来自用户在工作台「参考图」页上传的图片，不再有内置默认形象或自定义角色模式。portraits 只保留换衣地点与事件服装判定。 |
 | [城市目录](<selfie_core/geography.py>) | 不依赖 AstrBot 的 WorldProfile、不可变 CityCatalog，坐标与邻接按城市隔离；不查询真实铁路班次。 |
 | [世界适配](<selfie_core/world.py>) | 地理、场景推进、天气缓存等旧行为的宿主 mixin，仍依赖宿主状态和部分 AstrBot 能力，不是完全独立的纯模拟器。 |
 | [天气边界](<selfie_core/weather.py>) | Open-Meteo 当前天气与当日平均气温（`daily.temperature_2m_mean`）请求与结构校验；缓存、降级与地点归属由调用方负责。 |
@@ -28,7 +28,7 @@
 
 工作台有参考图、生图测试、添加素材、世界设置、事件编辑、日程安排六个页签。生成素材/城市草稿后需编辑检查并显式确认；草稿按 owner 隔离，30 分钟失效，重复确认幂等。城市确认使用生成时的 workspace revision，不能覆盖期间保存的新数据。生成与测试会调用所配置的 provider，离线单元测试使用替身，不等于真实效果验收。
 
-[配置 schema](<_conf_schema.json>)当前保留 65 项，以下 9 项由工作台接管：`home_city`、`home_district`、`travel_cities`、`costume_file`、`closeup_prompt_file`、`interact_prompt_file`、`city_catalog_file`、`district_file`、`scene_file`。首次初始化将旧值及迁移键记录到角色数据目录的 `workspace.json`；不删除原配置或原素材。已存在工作台状态时读取保存值，不再把旧配置覆盖回来。未知版本/损坏文件拒绝覆盖；原子写入和进程内锁不是跨进程事务。
+[配置 schema](<_conf_schema.json>)当前保留 42 项，以下 9 项由工作台接管：`home_city`、`home_district`、`travel_cities`、`costume_file`、`closeup_prompt_file`、`interact_prompt_file`、`city_catalog_file`、`district_file`、`scene_file`。首次初始化将旧值及迁移键记录到角色数据目录的 `workspace.json`；不删除原配置或原素材。已存在工作台状态时读取保存值，不再把旧配置覆盖回来。未知版本/损坏文件拒绝覆盖；原子写入和进程内锁不是跨进程事务。
 
 此次衣服库已有 118 条显式稳定编号；编号不能混入衣服名称/别名，新增条目不重排旧编号。互动由新的[互动素材](<interaction.txt>)读取；旧互动文件已迁移到私有备份，不随插件发布。实际素材迁移须显式执行，不由 WorkspaceService 构造自动改写。
 
@@ -36,28 +36,29 @@
 
 日记是实际 record 的确定性汇总，不调用 LLM 润色。30 秒后台循环在午夜后写入昨日日记；离线时段不补编。最近 7 份日记（每条最多 700 字）通过原 `selfie_memory_enabled` 门控注入聊天供查读，不代表完整逐小时历史重放。
 
-## 旧默认与自定义角色
+## 角色身份：只有名字
 
 配置项以[配置 schema](<_conf_schema.json>)为准，不要把真实配置、API key 或个人参考图当作示例提交。
 
-- `character_*` 全部留空时使用 legacy 预设及既有参考图优先级，旧运行数据位置保持原语义。
-- 任一角色字段非空即进入 custom 模式；缺失字段不再自动继承旧角色身份或旧参考图。路径字段只是管理员配置，不是上传组件或公开上传 API。
-- `character_reference_body`、`character_reference_head`、`character_reference_single` 使用绝对路径或相对插件目录的路径。请自行准备有权使用的同一角色素材；模块不会自动合成人脸/身体参考图。
-- custom 运行数据写入基础数据目录下 `characters/<身份键>/`，避免旧状态、照片记忆直接混入新身份。身份键由角色身份字段和部分参考图路径决定；这不是图片内容哈希，也不表示文件换内容后能自动识别新身份。
-- 活动角色在实例初始化时取快照。修改名字、描述、参考图等身份配置后，应停止/重载插件；不要期望在线修改配置立即安全切换 namespace。服装或声音的变化不一定创建新 namespace。
-- 更换身份不会自动迁移旧状态。返回原身份配置可重新使用原 namespace；迁移前需人工确认归属并单独备份。
-- 缺少参考图时默认不允许纯文生图。是否启用 `allow_text_only` 是明确的质量策略选择，不应通过自动回退旧角色图片掩盖配置错误。
+- **不再保留默认形象**：仓库和发布包不再包含 `assets/`，代码里也没有硬编码的长相 / 发型 / 衣服描述。长相、发型、衣服全部来自工作台「参考图」页上传的图片。
+- 配置只保留 `character_name`：用于称呼、群聊里叫她和照片记忆归属，不描述外观；留空也能用（群聊只能 @）。
+- 不再有 custom 模式、`characters/<身份键>/` 命名空间或 `language.character_text()`；运行数据统一在基础数据目录，照片记忆按 `character_name` 区分。
+- 历史配置项 `character_aliases` / `character_description` / `character_hair` / `character_default_outfit` / `character_default_hat` / `character_voice` / `character_reference_*` / `outfit_sleepwear` / `outfit_schoolwear` / `outfit_winterwear` / `ref_image*` / `role_has_hat` / `role_has_outer` / `custom_qzone_enabled` 已删除；旧配置里即使残留也不会再生效。
+- 没有填参考图时拒绝出图：`image_transport` 抛「还没有可用的参考图…」，聊天侧 `_generation_failure_text()` 把它转成去「参考图」页上传的引导；生图测试面板也会在可用性提示里拦。
+- 默认衣服交给参考图：`_resolve_look()` 没换装时返回 `ref_outfit=True`（`DEFAULT_REF_OUTFIT_TEXT`），只有点单换装 / 睡衣 / 泳池 / 夜店 / 事件服装这些 restyle 场景才用提示词描述衣服。
+- 学校场景不再强制 JK（`JK_*` 常量与 `school` 分支已删）；低温室外也不再自动换成棉袄 + 围巾的文字服装，想按天气换衣服用参考图页的气温条件。
 
-## 参考图替换（夜间素颜 / 低温冬装）
+## 参考图替换（夜间素颜）
 
-`ref_swap_enabled`（默认开，只作用于写实风格）不再往提示词里补冬装，而是换参考图；规则在 `selfie_core/ref_swap.py`，状态在 `state["ref_day"]`：
+素颜不再由配置开关控制，也没有「低温日自动换冬装参考图」了：这两件事（以及冬装的按气温换图）都放在工作台「参考图」页，数据在 `reference_images/library.json`。
 
-- `bare_face_active(scene, hour)`：22:00–07:00 且场景是室内睡觉房间（`type` 为 `bed`/`bed_sleepy`，或固定过夜房的 `sleep` 字段是 `bed`/`bunk`），并排除网吧包厢和进行中的事件（`scene_is_event`）。
-- `winter_active(record, today)`：只认「当天」的判定记录。`main._ensure_ref_day()` 在 `_living_loop` 每 30 秒经过时补判，每天 7 点后用当前城市查一次 Open-Meteo 当日平均气温并写 `state["ref_day"]`（`final=True`）；当天跨城旅行不重判；7 点前沿用前一天结论（`carried=True`）；气温查不到就不换、保留旧提示词，30 分钟后重试。
-- 判定只影响参考图选择：`main._photo_refs()` 返回 `(ref, face_ref, single_ref)` → `PhotoRequest` → `image_transport._openai_refs()`。多图站点贴 `[ref, face_ref]`；单图站点按 `face_ref > single_ref > ref > 原有单图` 选一张。
-- 内置角色用 `assets/ref_suyan.png` / `ref_winter.png` / `ref_winter_single.png`（拼接图用 Pillow 一次性生成好，运行时不需要 Pillow，生成脚本不随插件发布）；自定义角色必须显式配置 `ref_swap_face_image` / `ref_swap_winter_image` /（可选）`ref_swap_winter_single_image`，模块不会回退到内置角色的图。
-- 低温日 `look["ref_outfit"] = True`，提示词只保留 `WINTER_REF_OUTFIT_TEXT`（脱外套时用 `WINTER_REF_OUTFIT_NOCOAT`）；换装、事件服装、睡衣、校服这些 restyle 场景仍以提示词为准，参考图只负责脸和发色。
-- 生图测试：`main._workspace_preview_refs()` 把「素颜」勾选和参考图衣服（`ref_outfit`）转成显式 `refs`；`_resolve_look(ref_outfit=...)` 让提示词也按参考图服装写。只对写实风格生效；`_generate_closeup` / `_generate_selfie_shot` 的 `refs` 参数把同一组参考图传给提示词和生图，避免两边不一致。原来的「冬装经典」档位与 `_resolve_look(force_winter=...)` 已随经典八档一起删除。
+- 夜间素颜：`library.json` 的 `suyan: {enabled, image}`；`ReferenceLibrary.suyan_path()` 在启用且文件存在时返回图片路径，`configured()` 把「启用了素颜」也算作接管。前端卡片勾「启用素颜」并上传素颜三视图（`save_ref_slots` 校验「启用必须有图」），删除这张图会自动关掉素颜。
+- 规则在 `selfie_core/ref_swap.py`（纯函数，不读文件/网络/状态）：`bare_face_active(scene, hour)` = 22:00–07:00 且场景是室内睡觉房间（`type` 为 `bed`/`bed_sleepy`，或固定过夜房 `sleep` 字段是 `bed`/`bunk`），排除网吧包厢和进行中的事件（`scene_is_event`）。
+- `main._ref_sleep_face_image()` 读页面设置；`main._photo_refs()` 返回 `(ref, face_ref, single_ref)` → `PhotoRequest` → `image_transport._openai_refs()`：多图站点贴 `[ref, face_ref]`，单图站点按 `face_ref > single_ref > ref > 原有单图` 选一张。
+- 冬装：删除 `ref_swap_enabled` / `ref_swap_temp` / `ref_swap_face_image` / `ref_swap_winter_image` / `ref_swap_winter_single_image` 五个配置项；想按气温换整套衣服，就在参考图页建一条 `temp` 条件（`resolve_conditions()` 按日期 > 气温 > 概率取图），低温室外恢复成 `defaults.WINTER_OUTER` 等提示词。`state["ref_day"]` 只保留当天平均气温给气温条件用（参考图页有 temp 条件才查天气，一天一次、跨城不重判）。
+- 生图测试：`main._workspace_preview_refs()` 把「素颜」勾选转成页面素颜图；页面没启用时抛中文错误（`workspace_host._workspace_test()` 先校验，`workspace_api` 的安全错误白名单放行），前端在参考图页没启用时禁用勾选框并提示去哪开。
+- 不再有内置图：`assets/` 已从仓库和发布包移除，「填入内置参考图」功能与 `workspace_refs` 的 builtin/adopt 分支一起删除；素颜图也由用户在参考图页上传。
+- 「冬装经典」档位与 `_resolve_look(force_winter=...)` 仍随经典八档一起删除；`resolve_custom_look()` 不再接受 `winter_ref` 参数，`defaults.WINTER_REF_*` 常量已删除。
 
 ## 互动触发词与互动生图测试
 
@@ -160,7 +161,7 @@
 ## 换装只贴头部参考图
 
 - 触发条件：`main._restyle_head_only(scene, style, look)` 在写实风格、`look["restyle"]=True`（点单换装 / 随机衣服特写 / 事件服装 / 睡衣 / 泳衣 / 校服 / 低温提示词服装）时为真；默认服装和参考图衣服（穿参考图那套）不启用。
-- 取图：`main._head_only_refs()` 返回 `(正脸, 侧头, None)`；内置真人角色用 `assets/ref_real_face.png` + `assets/ref_real_head_side.png`，自定义角色用配置的头部参考图，睡觉房间素颜生效时只返回素颜三视图。
+- 取图：`main._head_only_refs()` 返回 `(头部参考图, None, None)`：优先用参考图页的「主站参考图2」，没填就用主站参考图1；睡觉房间素颜生效时只返回素颜三视图。
 - 透传：`_photo_refs(..., look=...)` 优先返回头部参考图 → `_generate(..., head_only=True)` → `PhotoRequest.head_only` → `_generate_impl` / `_generate_openai` → `image_transport._openai_refs(head_only=True)`：多图站点贴 `[正脸, 侧头]`，单图站点只贴 `[正脸]`，不会自动补全身照。
 - 提示词：`bare_face_note` 改为只在 `face_override == _ref_sleep_face_image()` 时出现，避免把侧头图误当成素颜；`restyle_note` 仍保留「参考图衣服不要照抄」。
 - 测试：`test_ref_swap.test_costume_change_uses_head_only_references` / `test_head_only_for_costume_change`、`test_jobs.test_head_only_flag_propagates_for_costume_generation`。
@@ -287,8 +288,8 @@ v1.4.2 进一步删除额度探针：`quota_probe_enabled`/`quota_probe_model` �
 
 - 新增 `selfie_core/ref_library.py`：`SLOTS` / `TARGETS` / `CONDITION_TYPES` / `PRIORITY`、`condition_matches()`（日期 > 气温 > 概率）、`_date_rule_matches()`（开始必填、结束留空＝单日、年份留空＝每年、跨年自动处理）、`migrate_condition()` / `merge_equivalent_conditions()` / `resolve_conditions()`（逐位置返回条件行与图片路径），以及 `ReferenceLibrary` 的图片归一化落盘、槽位 / 条件校验、`save_costume(single_ref=...)`、`snapshot()`。新增 `selfie_core/workspace_refs.py`：`save_ref_image` / `rename_ref_image` / `delete_ref_image` / `save_ref_slots` / `save_ref_conditions` / `save_ref_costume` / `adopt_builtin_refs` 等数据 URL 胶水；`workspace_api._ACTIONS` 与安全错误白名单同步扩充，bootstrap 多返回 `reference_library` 快照。
 - 数据：`plugin_data/astrbot_plugin_selfie/reference_images/library.json`（`version` / `images` / `slots` / `conditions`），`<id>.png` 原图（长边 ≤1536）、`<id>_thumb.jpg` 缩略图；旧条件（`image_id` / `image_id2` / `targets`、`month` / `day`）在读取时迁移成 `images: {slot: id}` 与 `start_*` / `end_*` 字段，同一触发条件的多条会合并；删除图片只清位置，位置全空才删条件。没有该目录时出图完全走原来的自动挑图逻辑。
-- `PhotoRequest` 新增 `main_refs` / `backup_refs` / `head_only`：`main._ref_plan()` 显式接管站点贴图（条件 > 夜间素颜 / 低温冬装 / 换装只贴头部 > 页面默认参考图 > 原自动挑图），`image_transport._generate_impl()` 直接按站点列表贴图、不再自动补图；`_generate()` 必须把这些关键字原样转进 `PhotoRequest`（回归：曾因漏接 `main_refs` 让聊天特写抛 `TypeError`，契约测试守住 `_generation_refs()` 的每个关键字都被 `_generate()` 接受）。
-- 服装来源：`workspace._test()` 的 `costume_source` 只允许 `daily` / `event` / `ref`（`ref` 需要 `ref_outfit={image_id,hat_off,coat_off}`）；`CLASSIC_COSTUMES` / `classic_costumes()` / 负数编号 / `HOLIDAY_OUTFITS` / `holiday_override` 已删除；`costume_rows()` 跳过 `single_ref` 图。`ref_swap.py` 负责夜间素颜 / 低温冬装的纯规则，`weather.fetch_daily_mean()` 提供当日平均气温。
+- `PhotoRequest` 新增 `main_refs` / `backup_refs` / `head_only`：`main._ref_plan()` 显式接管站点贴图（条件参考图 > 换装只贴头部 > 页面默认参考图 > 夜间素颜 / 原自动挑图），`image_transport._generate_impl()` 直接按站点列表贴图、不再自动补图；`_generate()` 必须把这些关键字原样转进 `PhotoRequest`（回归：曾因漏接 `main_refs` 让聊天特写抛 `TypeError`，契约测试守住 `_generation_refs()` 的每个关键字都被 `_generate()` 接受）。
+- 服装来源：`workspace._test()` 的 `costume_source` 只允许 `daily` / `event` / `ref`（`ref` 需要 `ref_outfit={image_id,hat_off,coat_off}`）；`CLASSIC_COSTUMES` / `classic_costumes()` / 负数编号 / `HOLIDAY_OUTFITS` / `holiday_override` 已删除；`costume_rows()` 跳过 `single_ref` 图。`ref_swap.py` 负责夜间素颜的纯规则（22:00–07:00 室内睡觉房间，图片来自参考图页），气温条件所需的当日平均气温由 `weather.fetch_daily_mean()` 提供；冬装不再自动换图，改用气温条件参考图（下一版删掉了 `ref_swap_*` 五个配置项）。
 - 任务取消：`WorkspaceAPI` 新增 `cancel_job`（校验 owner，只对 `IMAGE_ACTIONS = {"test","try_costume"}` 生效），`UNSEEN_CANCEL = 90` 秒无人轮询自动取消；前端 `pagehide` / `beforeunload` 对未完成页面任务发一次 `cancel_job`，草稿 / 城市生成等文本任务仍留在后台。
 
 - `main._deliver_photo()`：拟人模式下只在图片发完后结束，不再调用 `_send_reply()` 发第二段文字。`_photo_caption()` 仍生成第一人称描述，但只用于 `_save_selfie()` 的存档字段（相册、日记、照片记忆），按 AstrBot 分段规则切句后用逗号接成一条文本返回，不发送。

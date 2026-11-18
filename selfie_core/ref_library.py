@@ -13,6 +13,10 @@
 - ``backup1``：副站参考图 1
 - ``backup2``：副站参考图 2（副站不是单参考图时才生效）
 
+另外有一份「夜间素颜」设置（``suyan``）：启用后要配一张素颜三视图，
+22:00~次日 07:00 在室内睡觉房间拍的照片，脸部参考图换成这张图；
+它不占用上面四个槽位，也不参与条件参考图。
+
 条件参考图按「日期 > 气温 > 概率」的优先级覆盖它配过的位置；每个位置各自取
 「命中且配了这个位置」的条件里优先级最高的那一条。
 
@@ -67,6 +71,8 @@ def empty_document():
         "version": 1,
         "main": {"dual": True, "body": "", "head": ""},
         "backup": {"enabled": False, "single": True, "image": "", "image2": ""},
+        # 夜间素颜：22:00 到次日 07:00 在室内睡觉房间时，脸部参考图换成这张素颜三视图
+        "suyan": {"enabled": False, "image": ""},
         "images": {},
         "conditions": [],
     }
@@ -526,11 +532,16 @@ def _normalize_date_rule(item):
 
 
 def normalize_slots(payload, image_ids):
-    """槽位设置：main.dual / main.body / main.head / backup.*（只接受已上传的图片编号）。"""
+    """槽位设置：main.dual / main.body / main.head / backup.* / suyan.*（只接受已上传的图片编号）。
+
+    ``suyan`` 是夜间素颜：启用时必须有一张已上传的素颜三视图；停用时保留已选的图，
+    方便之后再打开。
+    """
     if not isinstance(payload, dict):
         raise RefLibraryError("参考图设置格式无效")
     main = payload.get("main") if isinstance(payload.get("main"), dict) else {}
     backup = payload.get("backup") if isinstance(payload.get("backup"), dict) else {}
+    suyan = payload.get("suyan") if isinstance(payload.get("suyan"), dict) else {}
 
     def image_id(value, field):
         value = _text(value, 40, field)
@@ -552,7 +563,12 @@ def normalize_slots(payload, image_ids):
         document["backup"].update(image="", image2="")
     if document["backup"]["single"]:
         document["backup"]["image2"] = ""
-    return document["main"], document["backup"]
+    suyan_image = image_id(suyan.get("image"), "素颜三视图")
+    suyan_enabled = bool(suyan.get("enabled", False))
+    if suyan_enabled and not suyan_image:
+        raise RefLibraryError("启用素颜要先上传一张素颜三视图照片")
+    document["suyan"] = {"enabled": suyan_enabled, "image": suyan_image}
+    return document["main"], document["backup"], document["suyan"]
 
 
 def _decode_image(data: bytes):
@@ -630,7 +646,7 @@ class ReferenceLibrary:
         base["conditions"] = merge_equivalent_conditions(
             [item for item in conditions if isinstance(item, dict)]) \
             if isinstance(conditions, list) else []
-        for name in ("main", "backup"):
+        for name in ("main", "backup", "suyan"):
             value = document.get(name)
             if isinstance(value, dict):
                 base[name].update({k: value.get(k, base[name][k]) for k in base[name]})
@@ -681,6 +697,8 @@ class ReferenceLibrary:
             "images": images,
             "main": dict(document["main"]),
             "backup": dict(document["backup"]),
+            "suyan": {"enabled": bool((document.get("suyan") or {}).get("enabled")),
+                      "image": str((document.get("suyan") or {}).get("image") or "")},
             "conditions": [public_condition(item) for item in document["conditions"]],
             "slots": [{"slot": slot, "label": SLOT_LABELS[slot]} for slot in SLOTS],
             "targets": {site: [dict(row) for row in rows] for site, rows in TARGETS.items()},
@@ -715,7 +733,7 @@ class ReferenceLibrary:
             raise RefLibraryError("参考图读取失败，请重新上传") from exc
 
     def find_source(self, source) -> str:
-        """按「来源标记」找已经导入过的同一张图（重复点「填入内置参考图」时复用）。"""
+        """按「来源标记」找已经导入过的同一张图（例如同一张图重复上传时复用）。"""
         value = str(source or "")
         if not value:
             return ""
@@ -801,6 +819,8 @@ class ReferenceLibrary:
             for key in ("image", "image2"):
                 if document["backup"].get(key) == image_id:
                     document["backup"][key] = ""
+            if str((document.get("suyan") or {}).get("image") or "") == image_id:
+                document["suyan"] = {"enabled": False, "image": ""}
             self._save(document)
             for path in (self.image_path(image_id), self.thumb_path(image_id)):
                 if path:
@@ -816,8 +836,13 @@ class ReferenceLibrary:
     def save_slots(self, payload):
         with self._mutex:
             document = self._load()
-            main, backup = normalize_slots(payload, set(document["images"]))
+            payload = payload if isinstance(payload, dict) else {}
+            if "suyan" not in payload:
+                # 老调用方（例如「填入内置参考图」）只发主站 / 副站：素颜设置保持不变
+                payload = dict(payload, suyan=dict(document.get("suyan") or {}))
+            main, backup, suyan = normalize_slots(payload, set(document["images"]))
             document["main"], document["backup"] = main, backup
+            document["suyan"] = suyan
             self._save(document)
             return self.snapshot()
 
@@ -899,7 +924,15 @@ class ReferenceLibrary:
 
     def configured(self) -> bool:
         """页面是否真的配过参考图（配了才接管出图用的参考图）。"""
-        return any(self.slot_paths().values()) or bool(self.document()["conditions"])
+        return (any(self.slot_paths().values()) or bool(self.document()["conditions"])
+                or bool(self.suyan_path()))
+
+    def suyan_path(self):
+        """夜间素颜要贴的那张图；没启用或图片文件没了返回空串。"""
+        suyan = self.document().get("suyan") or {}
+        if not suyan.get("enabled"):
+            return ""
+        return self.image_path(suyan.get("image"))
 
     def condition_rows(self):
         """条件 + 每个位置要贴的图片路径，供出图时直接使用。"""
