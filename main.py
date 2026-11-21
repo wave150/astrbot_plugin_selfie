@@ -3756,11 +3756,15 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
         优先级（从高到低）：条件参考图 → 换装只贴头部（夜里在睡觉房间时头部换成
         素颜三视图，先于页面槽位）→ 页面槽位 → 夜间素颜。
+        例外：夜间素颜生效时（22:00~次日 07:00 的室内睡觉房间）条件参考图整条跳过，
+        素颜反过来压过条件——冬装/节日衣服不该套在床上的睡衣上，条件里的脸部参考图
+        也会把刚卸完妆的脸顶回化妆脸。
         返回 ``{"main": (...), "backup": (...), "explicit": bool, "ref", "face_ref",
         "single_ref", "head_only", "condition"}``；``explicit`` 为真表示要让
         image_transport 按站点直接贴这些图（没有配置时按单站点兜底）。
         """
         legacy_ref, legacy_face, legacy_single = self._legacy_photo_refs(scene, style, look)
+        bare_face = self._bare_face_ref_active(scene, style)
         plan = {
             "main": (), "backup": (), "explicit": False,
             "ref": legacy_ref, "face_ref": legacy_face, "single_ref": legacy_single,
@@ -3772,10 +3776,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             configured = library.configured()
             slots = library.slot_paths() if configured else {}
             picked = {}
-            if configured:
+            rows = library.condition_rows() if configured else []
+            if configured and not bare_face:
                 picked = ref_library.resolve_conditions(
-                    library.condition_rows(), today=self._ref_today(),
+                    rows, today=self._ref_today(),
                     mean=self._ref_day_record().get("mean"), rolls=self._ref_rolls_today())
+            elif rows:
+                logger.info("[selfie] 夜间睡觉房间：条件参考图这晚不换，脸部按素颜三视图拍")
         except Exception as e:  # noqa: BLE001 - 参考图库异常时退回原有规则
             logger.warning(f"[selfie] 读取参考图库失败，按原有规则挑图: {e!r}")
             configured, slots, picked = False, {}, {}
@@ -3801,7 +3808,6 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             else:
                 # 夜里在睡觉房间换装：脸部参考图优先用素颜三视图，
                 # 不能按「主站参考图2（白天的头部三视图）」贴图。
-                bare_face = self._bare_face_ref_active(scene, style)
                 suyan = legacy_ref if bare_face else ""
                 primary = condition_path("main2") or suyan or slots.get("main2") \
                     or legacy_ref or (head_refs[0] if head_refs else "") or ""
