@@ -16,7 +16,8 @@ import uuid
 
 from .storage import JsonStateStore
 from .materials import MaterialStore, KINDS
-from .ref_library import ReferenceLibrary
+from .ref_library import ReferenceLibrary, RefLibraryError
+from .pose_sketch import PoseSketchLibrary
 from . import workspace_refs
 from . import world_editor
 from . import legacy_world
@@ -820,7 +821,7 @@ class WorkspaceService:
         costume_source = payload.get("costume_source") or default_source
         action_source = payload.get("action_source") or default_source
         if costume_source not in ("daily", "event", "ref", "sleepwear") or action_source not in (
-                "daily", "event", "meal", "sleep", "selfie", "interaction"):
+                "daily", "event", "meal", "sleep", "selfie", "interaction", "sketch"):
             raise WorkspaceError("服装/动作来源无效，请刷新页面后重试")
 
         event = None
@@ -950,6 +951,16 @@ class WorkspaceService:
             if meta is not None:
                 meta["interaction_id"] = entry["id"]
                 meta["interaction_action"] = action
+        elif action_source == "sketch":
+            sketch_id = payload.get("sketch_id")
+            if type(sketch_id) is not int or sketch_id <= 0:
+                raise WorkspaceError("请选择线稿参考特写")
+            entry = self.pose_sketch_library().get(sketch_id)
+            if entry is None:
+                raise WorkspaceError("线稿特写不存在，请刷新后重试")
+            cue_override = {"sketch_id": entry["id"], "text": f"线稿参考特写 #{entry['id']}"}
+            if meta is not None:
+                meta.update(sketch_id=entry["id"], sketch_label=entry["label"])
         elif type(payload.get("closeup_id")) is not int or payload["closeup_id"] <= 0:
             raise WorkspaceError("请选择日常特写")
 
@@ -1098,7 +1109,7 @@ class WorkspaceService:
     async def dispatch(self, action, payload, owner):
         try:
             return await self._dispatch(action, payload, owner)
-        except WorkspaceError:
+        except (WorkspaceError, RefLibraryError):
             raise
         except ValueError as exc:
             if type(exc).__name__ == "MaterialConflict":
@@ -1137,6 +1148,13 @@ class WorkspaceService:
             cached = self._ref_library_cache = ReferenceLibrary(root)
         return cached
 
+    def pose_sketch_library(self):
+        root = Path(self.host.data_dir) / "pose_sketches"
+        cached = getattr(self, "_pose_sketch_cache", None)
+        if cached is None or cached.root != root:
+            cached = self._pose_sketch_cache = PoseSketchLibrary(root)
+        return cached
+
     async def _dispatch(self, action, payload, owner):
         owner = _text(owner, "owner")
         if not isinstance(payload, dict):
@@ -1151,10 +1169,11 @@ class WorkspaceService:
                         "home_room_defaults": deepcopy(HOME_ROOMS),
         "sleepwear_defaults": deepcopy(DEFAULT_SLEEPWEAR),
                         "overnight_scenes": overnight_list(),
+                        "pose_sketches": self.pose_sketch_library().snapshot(),
                         "reference_library": workspace_refs.with_builtin(
                             self, self.reference_library().snapshot()),
                         "revision": self._document["revision"]}
-        if action in workspace_refs.REF_ACTIONS:
+        if action in workspace_refs.REF_ACTIONS | workspace_refs.POSE_SKETCH_ACTIONS:
             return workspace_refs.handle(self, action, payload)
         if action == "initialize_world":
             return await self._initialize_world(payload)

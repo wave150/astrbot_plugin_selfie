@@ -99,6 +99,8 @@ class PhotoRequest:
     # 工作台「参考图」页显式指定的站点参考图（按站点分）；非空时不再自动挑图
     main_refs: tuple[str, ...] = ()
     backup_refs: tuple[str, ...] = ()
+    # 线稿特写：强制身份图 + 线稿双图，不允许降为单图或纯文生图。
+    pose_image: str = ""
 
     def __post_init__(self):
         if not isinstance(self.prompt, str) or not isinstance(self.model, str):
@@ -117,7 +119,7 @@ class PhotoRequest:
             if not all(isinstance(value, str) for value in snapshot):
                 raise TypeError(name + " must contain only strings")
             object.__setattr__(self, name, snapshot)
-        for name in ("ref", "face_ref", "single_ref"):
+        for name in ("ref", "face_ref", "single_ref", "pose_image"):
             value = getattr(self, name)
             if value is None:
                 object.__setattr__(self, name, "")
@@ -161,6 +163,7 @@ class PhotoUseCase:
                 single_ref=request.single_ref or None,
                 head_only=request.head_only,
                 main_refs=request.main_refs, backup_refs=request.backup_refs,
+                **({"pose_image": request.pose_image} if request.pose_image else {}),
             )
             if not isinstance(result, bytes):
                 raise TypeError("Photo generator must return bytes")

@@ -173,7 +173,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                         ref: str | None = None, face_ref: str | None = None,
                         single_ref: str | None = None,
                         head_only: bool = False,
-                        main_refs=None, backup_refs=None) -> bytes:
+                        main_refs=None, backup_refs=None, pose_image: str = "") -> bytes:
         use_case = getattr(self, "_photo_use_case", None)
         if use_case is None:
             use_case = self._photo_use_case = PhotoUseCase(self._generate_impl)
@@ -182,7 +182,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                                ref or "", face_ref or "", single_ref or "",
                                head_only=bool(head_only),
                                main_refs=tuple(main_refs or ()),
-                               backup_refs=tuple(backup_refs or ()))
+                               backup_refs=tuple(backup_refs or ()),
+                               pose_image=pose_image)
         try:
             return await asyncio.wait_for(
                 use_case.execute(request), timeout=float(self.IMAGE_TOTAL_TIMEOUT)
@@ -201,6 +202,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         except Exception:
             pass
         text = str(error or "")
+        if text == "线稿参考特写需要支持至少两张参考图的生图站，请检查主站或副站的参考图张数设置":
+            return text
+        if text == "线稿参考特写不存在，请刷新线稿列表后重试":
+            return text
         if "还没有可用的参考图" in text or ("参考图" in text and "上传" in text):
             return ("我还没有可以参考的照片：打开插件页「自拍工作台 → 参考图」，"
                     "上传并填好主站 / 副站参考图，我就能拍了～")
@@ -1243,8 +1248,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     def _closeup_prompts(self) -> list:
         """读出特写提示词列表：每行一条，返回 [{"id", "text"}]。
 
-        id 就是文件里的编号（也就是工作台「素材库」里显示的编号），
-        所以在工作台里改/删某一条时，其它条目的编号不会变。
+        id 是稳定的内部素材编号；对外显示号由当前文字顺序和线稿顺序计算
+        已存在但为空的文件表示用户删空了文字库，不重新塞入内置动作
         """
         path = self._closeup_prompt_path()
         if path:
@@ -1255,11 +1260,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     return list(cache[2])
                 with open(path, encoding="utf-8-sig") as f:
                     entries = parse_materials("closeup", f.read())
-                if entries:
-                    self._closeup_cache = (path, mtime, entries)
-                    logger.info(f"[selfie] 特写提示词已加载 {len(entries)} 条：{path}")
-                    return list(entries)
-                logger.warning(f"[selfie] 特写提示词文件是空的，改用内置 8 条：{path}")
+                self._closeup_cache = (path, mtime, entries)
+                logger.info(f"[selfie] 特写提示词已加载 {len(entries)} 条：{path}")
+                return list(entries)
             except Exception as e:
                 logger.warning(f"[selfie] 读取特写提示词失败，改用内置 8 条: {e!r}")
         logger.warning(
@@ -1268,6 +1271,24 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         )
         return [{"id": index, "text": text}
                 for index, text in enumerate(CLOSEUP_PROMPTS_FALLBACK, 1)]
+
+    def _pose_sketch_library(self):
+        """动作线稿与人物参考图库分开保存，客户端只能传编号"""
+        try:
+            from .selfie_core.pose_sketch import PoseSketchLibrary
+        except ImportError:
+            from selfie_core.pose_sketch import PoseSketchLibrary
+        root = os.path.join(self.data_dir, "pose_sketches")
+        library = getattr(self, "_pose_sketch_store", None)
+        if library is None or str(library.root) != str(root):
+            library = self._pose_sketch_store = PoseSketchLibrary(root)
+        return library
+
+    def _pose_sketch_rows(self) -> list:
+        # 未配置本地数据目录的旧测试桩不访问磁盘
+        if not getattr(self, "data_dir", ""):
+            return []
+        return self._pose_sketch_library().rows()
 
     def _closeup_pm_ids(self) -> set:
         """需要 pm 才能抽到的提示词编号集合（按 txt 行号，从 1 开始）。
@@ -1290,58 +1311,67 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return out
 
     def _pick_closeup_prompt(self, pm: bool = False,
-                             forced_id: int | None = None) -> dict:
+                             forced_id: int | None = None,
+                             allow_sketch: bool = True) -> dict:
         """抽一条特写提示词（不会连着两次抽到同一条）。
 
         - pm=False（普通「特写」）：只抽普通池，排除 closeup_pm_ids 里那几条
         - pm=True （「特写pm」）  ：只抽 closeup_pm_ids 里那几条（默认第 2、6 条）
         - forced_id（管理员「admin特写N」）：直接取第 N 条；越界返回 {"error": "out_of_range"}
-        编号按 txt 行号从 1 开始；配置配歪（比如 txt 没那么多行）会退回全部，不会抽不出来。
+        对外编号为当前文字列表 1..N，再接线稿 N+1..M，删除后动态前移；
+        内部 material_id / sketch_id 保持不变，pm 编号按当前文字显示号判定。
         """
-        pool = self._closeup_prompts() or [
-            {"id": index, "text": text} for index, text in enumerate(CLOSEUP_PROMPTS_FALLBACK, 1)]
-        by_id = {int(entry["id"]): str(entry["text"]) for entry in pool}
+        pool = self._closeup_prompts()
+        # 对外编号动态连续：文字特写在前，线稿在后；内部素材 ID 不重写
+        pm_ids = self._closeup_pm_ids()
+        entries = [{"id": number, "material_id": int(entry["id"]),
+                    "text": str(entry["text"]),
+                    "tier": "special" if number in pm_ids else "normal"}
+                   for number, entry in enumerate(pool, 1)]
+        sketches = self._pose_sketch_rows() if allow_sketch and (not pm or forced_id) else []
+        for ordinal, row in enumerate(sketches, 1):
+            entries.append({"id": len(pool) + ordinal, "sketch_id": row["id"],
+                            "text": f"线稿参考特写：{row.get('label') or '动作线稿'}",
+                            "tier": "sketch"})
+        if not entries:
+            return {"error": "out_of_range", "id": forced_id or 0, "total": 0, "text": ""}
         if forced_id:
             try:
                 want = int(forced_id)
             except Exception:
                 want = 0
-            if want not in by_id:
-                return {"error": "out_of_range", "id": want, "total": len(pool), "text": ""}
-            text = by_id[want]
-            self.state["closeup_last"] = text
-            self.state["closeup_last_id"] = want
-            self.state["closeup_last_pm"] = bool(pm)
-            self._save_state()
-            logger.info(f"[selfie] 管理员指定特写第 {want} 条：{text[:40]}")
-            return {"id": want, "total": len(pool), "text": text, "pm": bool(pm),
-                    "tier": "forced", "forced": True}
-        pm_ids = self._closeup_pm_ids()
-        normal = [(i, t) for i, t in by_id.items() if i not in pm_ids]
-        special = [(i, t) for i, t in by_id.items() if i in pm_ids]
-        cand = (special or list(by_id.items())) if pm else (normal or list(by_id.items()))
-        last = str(self.state.get("closeup_last") or "")
-        pick = self.rng.choice(cand)
-        others = [e for e in cand if e[1] != last]
-        if len(cand) > 1 and pick[1] == last and others:
-            pick = self.rng.choice(others)
-        idx, text = pick
-        self.state["closeup_last"] = text
-        self.state["closeup_last_id"] = idx
+            if not 1 <= want <= len(entries):
+                return {"error": "out_of_range", "id": want, "total": len(entries), "text": ""}
+            pick = dict(entries[want - 1], forced=True)
+        else:
+            normal = [e for e in entries if e["tier"] != "special"]
+            special = [e for e in entries if e["tier"] == "special"]
+            cand = (special or entries) if pm else (normal or entries)
+            pick = self.rng.choice(cand)
+            last_key = self.state.get("closeup_last_key")
+            def identity(entry):
+                return (f"sketch:{entry['sketch_id']}" if "sketch_id" in entry
+                        else f"text:{entry['material_id']}")
+            others = [e for e in cand if (identity(e) != last_key if last_key else
+                                         e["text"] != self.state.get("closeup_last"))]
+            if len(cand) > 1 and others and pick not in others:
+                pick = self.rng.choice(others)
+        result = dict(pick, total=len(entries), pm=bool(pm))
+        self.state["closeup_last"] = result["text"]
+        self.state["closeup_last_key"] = (f"sketch:{result['sketch_id']}" if "sketch_id" in result
+                                          else f"text:{result['material_id']}")
+        self.state["closeup_last_id"] = result["id"]
         self.state["closeup_last_pm"] = bool(pm)
         self._save_state()
-        logger.info(
-            f"[selfie] 特写提示词抽到编号 {idx}（共 {len(pool)} 条，"
-            f"{'pm 特殊池' if pm else '普通池'}）：{text[:40]}"
-        )
-        return {
-            "id": idx, "total": len(pool), "text": text, "pm": bool(pm),
-            "tier": "special" if idx in pm_ids else "normal",
-        }
+        logger.info(f"[selfie] 特写{'指定' if forced_id else '抽到'}编号 {result['id']}"
+                    f"（共 {len(entries)} 条，{result['tier']}）：{result['text'][:40]}")
+        return result
 
-    async def _pick_closeup_cue(self, event, pm: bool, forced_id) -> dict | None:
+    async def _pick_closeup_cue(self, event, pm: bool, forced_id,
+                               allow_sketch: bool = True) -> dict | None:
         """管理员指定了编号就按编号来；编号越界回一句范围并返回 None。"""
-        cue = self._pick_closeup_prompt(pm, forced_id)
+        cue = (self._pick_closeup_prompt(pm, forced_id) if allow_sketch else
+               self._pick_closeup_prompt(pm, forced_id, allow_sketch=False))
         if cue.get("error") == "out_of_range":
             await event.send(MessageChain([Plain(
                 f"编号 {cue['id']} 没有哦，现在一共 {cue['total']} 条，换一个编号？"
@@ -2413,6 +2443,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
         refs 由生图测试显式传（参考图衣服档 / 素颜勾选）；None 时按当天规则自动挑。
         """
+        if (cue or {}).get("sketch_id") is not None:
+            if cos_name:
+                raise ValueError("线稿参考特写暂不与角色参考图混用，请单独选择线稿动作")
+            return await self._generate_sketch_closeup(scene, model, look, cue, refs=refs)
         cue_text = self._clean_closeup_cue((cue or {}).get("text"))
         # cos 特写最多两张参考图：她自己 + 角色图，不再额外掺素颜参考图，免得超过站点张数上限
         cos = bool(cos_name)
@@ -2494,6 +2528,76 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             return await self._generate(prompt, model, style, neg, **cos_refs)
         return await self._generate(prompt, model, style, neg, **gen_refs)
 
+    async def _generate_sketch_closeup(self, scene: dict, model: str, look: dict,
+                                       cue: dict, refs: tuple | None = None) -> bytes:
+        """线稿始终是第二张图，只取动作与机位，不使用线稿的人物外观"""
+        library = self._pose_sketch_library()
+        item = library.get(cue.get("sketch_id"))
+        pose_image = library.image_path(cue.get("sketch_id")) if item else ""
+        if not pose_image:
+            raise ValueError("线稿参考特写不存在，请刷新线稿列表后重试")
+        style = STYLE_REALISTIC
+        if refs is None:
+            gen_refs = self._generation_refs(scene, style, look)
+        else:
+            ref, face, single = refs
+            gen_refs = {"ref": ref, "face_ref": face, "single_ref": single,
+                        "head_only": self._restyle_head_only(scene, style, look)}
+        # 两图站点给身份留一个槽位，另一个槽位必须留给线稿
+        main = tuple(gen_refs.get("main_refs") or ())
+        backup = tuple(gen_refs.get("backup_refs") or ())
+        # 身份必须优先使用清晰面部图，不能让全身图的小脸挤掉专门的面部参考
+        face = gen_refs.get("face_ref") or ""
+        if refs is None or any(refs):
+            head = self._head_only_refs(scene, style)
+            face = (self._ref_sleep_face_image() if self._bare_face_ref_active(scene, style)
+                    else face or (head[0] if head else ""))
+        primary = face or next((x for x in main if x), "") or gen_refs.get("ref") \
+            or gen_refs.get("single_ref") or ""
+        secondary_site = primary
+        # 三图站点还能带上衣服图，传输层按容量截取，但面部和线稿永远保留
+        outfit_main = next((x for x in main if x and x != primary), "") or gen_refs.get("ref") or ""
+        outfit_backup = next((x for x in backup if x and x != primary), "") or gen_refs.get("single_ref") or outfit_main
+        main_images = tuple(dict.fromkeys(x for x in (primary, outfit_main) if x))
+        backup_images = tuple(dict.fromkeys(x for x in (primary, outfit_backup) if x))
+        if not primary:
+            raise ValueError("还没有可用的参考图：请打开插件页「自拍工作台 → 参考图」，上传并填好主站 / 副站参考图，再回来拍照")
+        prompt_refs = (primary, None, secondary_site)
+        face_lock = (
+            "脸部硬性约束（最高优先级）：参考图1是唯一的本人面部身份参考，最终人物的脸必须与"
+            "参考图1一比一一致，是同一张脸的一比一复刻，眼睛形状与大小、眼距、鼻梁与鼻翼、"
+            "嘴型与唇形、脸型轮廓、下颌线、五官比例和肤色都必须严格符合参考图1"
+            "只允许随着机位产生合理透视、表情和光影变化，禁止换脸、改五官、改变脸型、"
+            "美颜或生成另一个人；参考图2只指导动作和机位，其头部只取朝向和角度，"
+            "禁止采用或融合线稿人体模型的脸型、五官、长相与人物身份"
+        )
+        # 不叠加随机文字特写、吃饭/睡觉动作，姿势和裁切全部以线稿为准
+        sketch_cue = {"text": "严格按照参考图2白描线稿中人体模型的姿势、肢体关系、镜头角度和构图裁切拍摄"}
+        prompt = self._closeup_prompt(scene, model, style, look, sketch_cue, refs=prompt_refs)
+        prompt = await self._scene_adapt_prompt(prompt, scene, look, sketch_cue["text"])
+        prompt = face_lock + "\n" + prompt
+        # 在场景适配之后追加硬约束，防止适配模型抹掉动作图分工
+        if primary == self._ref_sleep_face_image():
+            prompt += "\n身份参考图是卸妆后的素颜，不要添加眼影、眼线、腮红或口红，保持自然皮肤质感"
+        prompt += (
+            "\n以下线稿动作要求优先于上文通用特写构图与姿势要求，构图和姿势不冲突地以线稿为准"
+            "\n参考图分工：参考图1只确定本人面部身份和发型；服装按上面的服装要求，"
+            "若收到参考图3则它仅提供服装信息，不能改变参考图1的脸；参考图2是动作白描线稿，"
+            "仅作为动作示意图，不是最终画风参考；"
+            "严格按照参考图2中人体模型的动作、身体朝向、四肢位置、支撑接触关系、镜头俯仰角度、"
+            "机位、透视及特写裁切摆姿势，不要改成其它动作或默认自拍姿势"
+            "线稿中的人体模型只是动作示意，最终画面中的人物必须是参考图1里的真人，"
+            "皮肤真实自然，有自然肤色、细微皮肤纹理和真实摄影光影，不要线条描边、插画、"
+            "素描、白色人体模型、塑料皮肤或人偶质感，不要把线稿本身画进最终照片"
+        )
+        prompt += "\n再次强调：脸必须与参考图1一比一一致，不能换脸、改五官或融合线稿中的长相；动作与机位才按照参考图2"
+        negative = list(look.get("negative_extra") or []) + [
+            "线稿", "白描", "素描", "人体模型", "塑料皮肤", "插画", "换脸", "不同的脸",
+            "五官改变", "脸型改变", "融合线稿人物长相", "参考图2的脸", "美颜"]
+        return await self._generate(prompt, model, style, negative,
+                                    main_refs=main_images, backup_refs=backup_images,
+                                    pose_image=pose_image)
+
     async def _generate_selfie_shot(self, scene: dict, model: str, style: str,
                                     look: dict, action: dict,
                                     refs: tuple | None = None) -> bytes:
@@ -2539,7 +2643,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             # 只要特写提示词）；场景仍沿用事件当前地点。
             scene = self._event_photo_scene(await self._get_scene())[0]
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
-            style = self._style(style_override)
+            style = STYLE_REALISTIC if (cue or {}).get("sketch_id") is not None else self._style(style_override)
             await self._ensure_ref_day(scene)
             cos_name = str((cand or {}).get("name") or "")
             char_path = str((cand or {}).get("path") or "")
@@ -2587,7 +2691,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             logger.info(
                 f"[selfie] 已生成{kind_name or '特写'}（admin={is_admin}, sender={sender}, "
                 f"scene={scene.get('type')}, outfit={look.get('name')}, "
-                f"cos={cos_name or '-'}, cue=#{int((cue or {}).get('id') or 0)}"
+                f"cos={cos_name or '-'}, cue=#{(cue or {}).get('id') or (cue or {}).get('sketch_id') or 0}"
                 f"({(cue or {}).get('tier') or 'normal'}), "
                 f"style={style}, quota_used={self._quota_used(sender) if sender else '-'}）"
             )
@@ -3675,7 +3779,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if isinstance(look, dict) and look.get("restyle"):
             head = self._head_only_refs(scene, style)
             if head:
-                logger.info("[selfie] 换装：参考图只贴头部，不贴参考图里的衣服")
+                logger.debug("[selfie] 换装：参考图只贴头部，不贴参考图里的衣服")
                 return head
         face = self._ref_sleep_face_image() if self._bare_face_ref_active(scene, style) else None
         return None, (face or None), None
@@ -3782,7 +3886,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     rows, today=self._ref_today(),
                     mean=self._ref_day_record().get("mean"), rolls=self._ref_rolls_today())
             elif rows:
-                logger.info("[selfie] 夜间睡觉房间：条件参考图这晚不换，脸部按素颜三视图拍")
+                logger.debug("[selfie] 夜间睡觉房间：条件参考图这晚不换，脸部按素颜三视图拍")
         except Exception as e:  # noqa: BLE001 - 参考图库异常时退回原有规则
             logger.warning(f"[selfie] 读取参考图库失败，按原有规则挑图: {e!r}")
             configured, slots, picked = False, {}, {}
@@ -4783,7 +4887,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     ]))
                     return True
                 else:
-                    cue = await self._pick_closeup_cue(event, pm, forced_id)
+                    cue = await self._pick_closeup_cue(event, pm, forced_id, allow_sketch=False)
                     if cue is None:
                         return True
                     self._generating = True

@@ -153,7 +153,8 @@ class WorkspaceHostMixin:
             raise ValueError('素颜选项格式无效')
         if bare_face:
             try:
-                realistic = self._style() == 'realistic'
+                realistic = (self._style() == 'realistic'
+                             or (isinstance(cue_override, dict) and cue_override.get('sketch_id') is not None))
             except Exception:
                 realistic = True
             if realistic:
@@ -190,6 +191,11 @@ class WorkspaceHostMixin:
                                for k in ('name', 'desc'))):
                 raise ValueError('衣服草稿格式无效')
             costume = {'name': costume_override['name'], 'description': costume_override['desc']}
+        sketch_id = cue_override.get('sketch_id') if isinstance(cue_override, dict) else None
+        if sketch_id is not None:
+            library = self._pose_sketch_library()
+            if not library.get(sketch_id) or not library.image_path(sketch_id):
+                raise ValueError('线稿参考特写不存在，请刷新线稿列表后重试')
         selfie_action = None
         if cue_override is not None and isinstance(cue_override, dict):
             raw_action = cue_override.get('selfie')
@@ -212,6 +218,8 @@ class WorkspaceHostMixin:
             if not isinstance(text, str) or not text.strip():
                 raise ValueError('动作描述格式无效')
             cue = {'text': text.strip()[:4000]}
+            if sketch_id is not None:
+                cue['sketch_id'] = sketch_id
         # 互动来源：动作词由服务端从互动库条目里取出，决定用「镜头外伸一只手」的互动构图。
         cue_kind = ''
         if isinstance(cue_override, dict):
@@ -278,7 +286,7 @@ class WorkspaceHostMixin:
                         await ensure(scene)
                     except Exception:
                         pass
-                style = self._style()
+                style = 'realistic' if sketch_id is not None else self._style()
                 # 测试面板的参考图覆盖：素颜勾选强制用素颜脸部图，参考图衣服贴那张衣服图
                 refs = None
                 refs_getter = getattr(self, '_workspace_preview_refs', None)

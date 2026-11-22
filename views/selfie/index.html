@@ -423,6 +423,7 @@
               <label class="field-label" for="t-action-source">动作来源</label>
               <select class="input" id="t-action-source">
                 <option value="daily">日常动作（特写库）</option>
+                <option value="sketch">线稿参考特写</option>
                 <option value="event">事件动作（事件素材）</option>
                 <option value="meal">吃饭（菜品库）</option>
                 <option value="sleep">睡觉（夜间动作）</option>
@@ -453,6 +454,7 @@
             </label>
             <div class="field-hint" id="t-bare-hint">勾上后这张测试图强制用「参考图」页启用并上传的那张素颜三视图，不用等到 22:00；只在写实风格下生效，参考图页没启用素颜时这个勾选框不可用。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。</div>
           </div>
+          <div id="t-sketch-preview" class="ref-state" hidden></div>
         </section>
       </div>
 
@@ -553,6 +555,17 @@
           </div>
         </section>
       </div>
+
+      <section class="card" id="sketch-card" hidden>
+        <div class="card-head"><h2 class="card-title">线稿参考特写</h2><button class="btn btn-ghost" id="sketch-refresh" type="button">刷新线稿</button></div>
+        <p class="card-hint">上传动作白描线稿，显示编号接在文字特写之后，删除前面条目后自动前移，不内置图片<br>线稿只指导动作与机位，最终生成真人照片，仅支持多参考图生图站</p>
+        <div class="grid-2">
+          <div class="field"><label class="field-label" for="sketch-label">线稿名称</label><input class="input" id="sketch-label" maxlength="40" placeholder="可选，留空自动命名；名称与动态显示号独立" /></div>
+          <div class="field"><label class="field-label" for="sketch-file">动作线稿图</label><input class="input file" id="sketch-file" type="file" accept="image/png,image/jpeg,image/webp" /><div class="field-hint">PNG / JPEG / WebP，单张不超过 8MB</div></div>
+        </div>
+        <div class="row-actions"><button class="btn btn-primary" id="sketch-upload" type="button">上传线稿</button><span class="status" id="sketch-status"></span></div>
+        <div class="ref-wall" id="sketch-wall" style="margin-top:12px"></div>
+      </section>
 
       <section class="card" id="try-card" hidden>
         <h2 class="card-title">试穿预览（仅服装草稿 · 不入库）</h2>
@@ -1669,13 +1682,26 @@
     }
   }
 
+  function imageElapsedText(result) {
+    var seconds = result && result.elapsed_seconds;
+    if (typeof seconds !== "number" || !isFinite(seconds) || seconds < 0) return "";
+    return "生图总耗时 " + seconds.toFixed(1) + " 秒（包含提示词准备/重试/下载）";
+  }
+
+  function imageCompletionText(label, result) {
+    var elapsed = imageElapsedText(result);
+    return label + (elapsed ? " · " + elapsed : "");
+  }
+
   function applyResumedJob(entry, result) {
     var label = (entry && entry.label) || JOB_TITLES[entry.action] || "后台任务";
+    var isImageJob = entry.action === "test" || entry.action === "try_costume";
+    var completed = isImageJob ? imageCompletionText(label + "已完成", result) : label + "已完成";
     var image = extractImage(result);
     if (image && isImageDataUrl(image)) {
-      openImageModal(image, label + " · 完成");
+      openImageModal(image, completed);
     }
-    toast(label + "已完成", "ok", 6000);
+    toast(completed, "ok", 6000);
     if (!state.loaded) return;
     if (entry.action === "initialize_world" || entry.action === "draft_city") {
       bootstrap({ forceSettings: true, forceEvents: true });
@@ -2079,9 +2105,9 @@
                              keywords: name + " " + str(row.text) + " " + str(row.id) });
     });
     (state.materials.closeup || []).forEach(function (row) {
-      var name = str(row.name) || ("全局特写 #" + str(row.id));
+      var name = str(row.name) || ("全局特写 #" + materialDisplayNumber("closeup", row.id));
       entries.actions.push({ key: "global:" + str(row.id), ref: { source: "global", id: str(row.id) },
-                             label: "全局特写 #" + str(row.id) + "：" + name,
+                             label: "全局特写 #" + materialDisplayNumber("closeup", row.id) + "：" + name,
                              sub: truncate(str(row.text), 46),
                              keywords: name + " " + str(row.text) + " " + str(row.id) });
     });
@@ -2842,6 +2868,7 @@
     state.overnightScenes = (Array.isArray(data.overnight_scenes) ? data.overnight_scenes : [])
       .filter(function (room) { return room && str(room.id).trim() && str(room.name).trim() && str(room.desc).trim(); })
       .map(function (room) { return { id: str(room.id), name: str(room.name), desc: str(room.desc), sleep: str(room.sleep) }; });
+    state.poseSketches = data.pose_sketches || {images: []};
     state.referenceLibrary = normalizeReferenceLibrary(data.reference_library);
     state.loaded = true;
     setConn("ok");
@@ -2876,6 +2903,7 @@
     renderCitiesDatalist();
     renderAlbum();
     renderRefPanel();
+    renderSketchPanel();
     if (!state.album.loaded && !state.album.loading) loadAlbum({});
   }
 
@@ -2898,7 +2926,7 @@
     (items || []).forEach(function (entry) {
       var option = document.createElement("option");
       option.value = str(entry.id);
-      option.textContent = "#" + str(entry.id) + " " + truncate(materialLabel(kind, entry), 44);
+      option.textContent = "#" + materialDisplayNumber(kind, entry.id) + " " + truncate(materialLabel(kind, entry), 44);
       select.appendChild(option);
     });
     if (!select.options.length) {
@@ -3645,6 +3673,79 @@
     return index;
   }
 
+  function sketchRows() { return (state.poseSketches && state.poseSketches.images) || []; }
+
+  /* 显示号随当前数组顺序变化；所有请求仍使用稳定 id，不写回素材或线稿文件。 */
+  function materialDisplayNumber(kind, id) {
+    if (kind !== "closeup") return str(id);
+    var index = (state.materials.closeup || []).findIndex(function (row) { return str(row.id) === str(id); });
+    return index >= 0 ? String(index + 1) : "（已删除）";
+  }
+
+  function sketchDisplayNumber(id) {
+    var index = sketchRows().findIndex(function (row) { return str(row.id) === str(id); });
+    return index >= 0 ? String((state.materials.closeup || []).length + index + 1) : "（已删除）";
+  }
+
+  function sketchDisplayLabel(row) {
+    var index = sketchRows().indexOf(row);
+    return "特写 #" + sketchDisplayNumber(row.id) + " · 线稿第 " + (index + 1) + " 张 · " + row.label;
+  }
+
+  async function sketchThumb(img, id) {
+    try { var data = await api({action: "pose_sketch_image", id: id, thumb: true}); img.src = data.image; }
+    catch (err) { img.alt = "线稿缩略图读取失败"; }
+  }
+
+  function renderSketchPreview() {
+    var box = $("#t-sketch-preview"); clear(box);
+    box.hidden = state.testActionSource !== "sketch";
+    if (box.hidden) return;
+    var id = Number($("#t-closeup").value);
+    var row = sketchRows().filter(function (item) { return item.id === id; })[0];
+    if (!row) { box.textContent = "还没有可用线稿，请到「添加素材」上传动作线稿图"; return; }
+    var title = document.createElement("div"); title.textContent = "线稿参考" + sketchDisplayLabel(row); box.appendChild(title);
+    var img = document.createElement("img"); img.className = "ref-slot-thumb"; img.style.objectFit = "contain"; img.alt = "所选动作线稿缩略图"; box.appendChild(img); sketchThumb(img, row.id);
+  }
+
+  function renderSketchPanel() {
+    var wall = $("#sketch-wall"); clear(wall);
+    if (!sketchRows().length) { var empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "还没有线稿，上传动作白描线稿后可按特写编号选择"; wall.appendChild(empty); }
+    sketchRows().forEach(function (row) {
+      var card = document.createElement("div"); card.className = "ref-card";
+      var img = document.createElement("img"); img.className = "ref-card-thumb"; img.style.objectFit = "contain"; img.alt = sketchDisplayLabel(row); card.appendChild(img); sketchThumb(img, row.id);
+      var body = document.createElement("div"); body.className = "ref-card-body"; body.textContent = sketchDisplayLabel(row); card.appendChild(body);
+      var actions = document.createElement("div"); actions.className = "ref-card-actions";
+      [["命名", "rename_pose_sketch"], ["删除", "delete_pose_sketch"]].forEach(function (item) {
+        var btn = document.createElement("button"); btn.className = "btn btn-mini"; btn.type = "button"; btn.textContent = item[0];
+        btn.onclick = async function () {
+          var payload = {id: row.id};
+          if (item[1] === "rename_pose_sketch") {
+            var field = document.createElement("div"); field.className = "field";
+            var input = document.createElement("input"); input.className = "input";
+            input.type = "text"; input.maxLength = 40; input.value = row.label || "";
+            input.setAttribute("aria-label", "线稿名称"); field.appendChild(input);
+            var hint = document.createElement("div"); hint.className = "field-hint";
+            hint.textContent = "最多 40 个字，重命名只修改名称，不改变特写编号或列表顺序"; field.appendChild(hint);
+            var pending = openModal({title: "重命名 · 特写 #" + sketchDisplayNumber(row.id), body: field, okText: "保存名称"});
+            setTimeout(function () { input.focus(); input.select(); }, 60);
+            if (!await pending) return;
+            payload.label = input.value.trim();
+            if (!payload.label) { toast("请输入线稿名称", "warn"); return; }
+          } else if (!await openModal({title: "删除线稿", body: "删除" + sketchDisplayLabel(row) + "？后续条目的显示编号将前移", okText: "删除", danger: true})) return;
+          btn.disabled = true;
+          try { var result = await api(Object.assign({action: item[1]}, payload)); applySketchSnapshot(result.pose_sketches); }
+          catch (err) { toast(normalizeError(err), "err"); }
+          finally { btn.disabled = false; }
+        }; actions.appendChild(btn);
+      }); card.appendChild(actions); wall.appendChild(card);
+    });
+  }
+
+  function applySketchSnapshot(snapshot) {
+    state.poseSketches = snapshot || {images: []}; renderSketchPanel(); renderTestMaterialSources(true); refreshTestAvailability();
+  }
+
   function renderTestEventPick() {
     var select = $("#t-event-id");
     var box = $("#t-event-pick");
@@ -3735,7 +3836,19 @@
               ? "互动来源下这里列的是互动库里的提示词，按行首动作词（摸摸 / 捏捏 / 戳戳…）走互动特写构图，照片里会有一只镜头外伸进来的手。"
               : "";
     }
-    if (state.testActionSource === "meal") {
+    if (state.testActionSource === "sketch") {
+      var previous = preserve ? closeupSelect.value : "";
+      clear(closeupSelect);
+      sketchRows().forEach(function (row) {
+        var option = document.createElement("option"); option.value = String(row.id);
+        option.textContent = sketchDisplayLabel(row); closeupSelect.appendChild(option);
+      });
+      if (!sketchRows().length) { var empty = document.createElement("option"); empty.value = ""; empty.textContent = "（还没有线稿，请到添加素材上传）"; closeupSelect.appendChild(empty); }
+      closeupSelect.disabled = !sketchRows().length;
+      if (sketchRows().some(function (row) { return String(row.id) === previous; })) closeupSelect.value = previous;
+      closeupHint.textContent = "线稿只指导动作与机位，最终生成真人照片，仅支持多参考图生图站";
+      state.testEventActions = [];
+    } else if (state.testActionSource === "meal") {
       fillMaterialSelect($("#t-meal"), state.materials.meal || [], "meal", preserve);
       /* 吃饭来源下「动作 / 特写」只显示 5 套吃饭机位，不再列特写库。 */
       fillMealSetupSelect(closeupSelect, preserve);
@@ -3774,6 +3887,7 @@
         }
       }
     }
+    renderSketchPreview();
   }
 
   function testAvailability() {
@@ -3825,6 +3939,8 @@
     } else if (state.testActionSource === "interaction") {
       if (!(state.materials.interaction || []).length) reasons.push("素材库没有互动提示词（interaction）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择互动提示词");
+    } else if (state.testActionSource === "sketch") {
+      if (!sketchRows().length || !$("#t-closeup").value) reasons.push("请选择线稿参考特写，先在添加素材上传线稿");
     } else if (state.testActionSource === "daily") {
       if (!state.materials.closeup.length) reasons.push("素材库没有特写（closeup）");
       else if (!$("#t-closeup") || $("#t-closeup").value === "") reasons.push("还没有选择日常特写");
@@ -3951,7 +4067,9 @@
           : "服装：日常" + (payload.costume_name ? "「" + str(payload.costume_name) + "」" : " #" + str(payload.costume_id)));
     if (payload.bare_face) lines.push("脸部：素颜参考图");
     var actionName = payload.action_source === "event" ? testEventActionName(payload.event_action) : "";
-    if (payload.action_source === "meal") {
+    if (payload.action_source === "sketch") {
+      lines.push("动作：线稿参考特写 #" + sketchDisplayNumber(payload.sketch_id));
+    } else if (payload.action_source === "meal") {
       var mealSetup = MEAL_SETUP_OPTIONS[payload.meal_setup];
       lines.push("动作：吃饭 / 菜品「" + str(payload.meal_name) + "」" +
         (mealSetup ? " / " + mealSetup.label : ""));
@@ -3970,9 +4088,11 @@
     } else {
       lines.push(payload.action_source === "event"
         ? "动作：事件动作" + (actionName ? "「" + actionName + "」" : "") + " " + str(payload.event_action).length + " 字"
-        : "动作：日常特写 #" + str(payload.closeup_id));
+        : "动作：日常特写 #" + materialDisplayNumber("closeup", payload.closeup_id));
     }
     if (result && result.job_id) lines.push("job：" + result.job_id);
+    var elapsed = imageElapsedText(result);
+    if (elapsed) lines.push(elapsed);
     lines.push("时间：" + new Date().toLocaleString());
     meta.textContent = lines.join("\n");
     img.onclick = function () { openImageModal(image, "生成图片"); };
@@ -4278,7 +4398,11 @@
       costumeLine = "服装：事件「" + str((testEvent() || {}).name) + "」/ " + costume.name;
     }
     var actionLine;
-    if (state.testActionSource === "meal") {
+    if (state.testActionSource === "sketch") {
+      payload.sketch_id = selectedMaterialId($("#t-closeup"));
+      if (payload.sketch_id === null) { toast("请选择线稿参考特写", "err"); return; }
+      actionLine = "动作：线稿参考特写 #" + sketchDisplayNumber(payload.sketch_id);
+    } else if (state.testActionSource === "meal") {
       var mealId = selectedMaterialId($("#t-meal"));
       if (mealId === null) { toast("请选择菜品", "err"); return; }
       var mealSelect = $("#t-meal");
@@ -4304,7 +4428,7 @@
       var closeupId = selectedMaterialId($("#t-closeup"));
       if (closeupId === null) { toast("请选择日常特写", "err"); return; }
       payload.closeup_id = closeupId;
-      actionLine = "动作：日常特写 #" + closeupId;
+      actionLine = "动作：日常特写 #" + materialDisplayNumber("closeup", closeupId);
     } else if (state.testActionSource === "selfie") {
       var selfieId = selectedMaterialId($("#t-closeup"));
       if (selfieId === null) { toast("请选择自拍动作", "err"); return; }
@@ -4364,8 +4488,8 @@
           if (!image) throw new Error("后端没有返回 image 字段");
           if (image.indexOf("data:image/") !== 0) throw new Error("image 不是 data:image/ 开头的 dataURL");
           showTestImage(image, payload, result);
-          setStatus($("#t-status"), "生成完成", "ok");
-          toast("生成成功", "ok");
+          setStatus($("#t-status"), imageCompletionText("生成完成", result), "ok");
+          toast(imageCompletionText("生成成功", result), "ok");
           if (state.album.loaded) loadAlbum({ page: 0 });
         } catch (err) {
           if (state.testCancelled) {
@@ -4405,6 +4529,7 @@
 
   function updateMaterialHints() {
     var kind = $("#m-kind").value;
+    $("#sketch-card").hidden = kind !== "closeup";
     var hint = $("#m-format-hint");
     if (hint) hint.textContent = "草稿格式：" + FORMAT_HINTS[kind];
     var draftHint = $("#m-draft-format");
@@ -4459,7 +4584,7 @@
     }
     items.forEach(function (entry) {
       var row = el("div", "material-row");
-      row.appendChild(el("span", "material-id", "#" + str(entry.id)));
+      row.appendChild(el("span", "material-id", "#" + materialDisplayNumber(kind, entry.id)));
       var main = el("div", "material-main");
       main.appendChild(el("div", "material-label", materialLabel(kind, entry)));
       var text = str(entry.text);
@@ -4485,7 +4610,7 @@
 
   var MATERIAL_EDIT_HINT = {
     costume: "格式：名称 | 别名1,别名2 | 服装描述（别名可为空，但竖线要保留两处）",
-    closeup: "一行一条特写提示词；编号保持不变，其它条目编号也不受影响。",
+    closeup: "一行一条特写提示词；显示号按当前文字列表顺序排列，线稿接续编号，删除后后续显示号自动前移。",
     interaction: "一行一条互动提示词，开头固定为「动作词：【机位短语】；正文」（动作词如摸摸 / 捏捏 / 戳戳 / 揉揉 / 拍拍）；正文只写一张照片里定格的那一刻，不要写连续动作。",
     meal: "一行一条菜品：「菜名 | 描述」，描述约100字，写清菜、主食和餐具。",
     selfie: "一行一条自拍动作：「名字 | 表情 | 手势」；前置摄像头自拍，照片里不出现手机，手势只用没拿手机的那只手。"
@@ -4499,12 +4624,14 @@
     }
     if (result && result.revision) state.materialRevisions[kind] = str(result.revision);
     renderMaterialPanel();
+    renderSketchPanel();
     renderTestMaterialSources(true);
     fillMaterialSelect($("#try-closeup"), state.materials.closeup, "closeup", true);
     renderEvents();
   }
 
   async function editMaterialEntry(kind, entry, btn) {
+    var displayNumber = materialDisplayNumber(kind, entry.id);
     var field = el("div", "field");
     field.appendChild(el("div", "field-hint", MATERIAL_EDIT_HINT[kind] || "一行文本。"));
     var area = document.createElement("textarea");
@@ -4512,7 +4639,7 @@
     area.rows = kind === "costume" ? 3 : 9;
     area.value = str(entry.text);
     field.appendChild(area);
-    var ok = await openModal({ title: "编辑素材 #" + str(entry.id), body: field, okText: "保存" });
+    var ok = await openModal({ title: "编辑素材 #" + materialDisplayNumber(kind, entry.id), body: field, okText: "保存" });
     if (!ok) return;
     var text = area.value.replace(/\r/g, "").replace(/\s+$/, "").trim();
     if (!text) { toast("内容不能为空", "warn"); return; }
@@ -4532,7 +4659,7 @@
         revision: state.materialRevisions[kind] || ""
       });
       applyMaterialWriteResult(kind, result);
-      toast("已保存第 " + entry.id + " 条", "ok");
+      toast("已保存第 " + displayNumber + " 条", "ok");
     } catch (err) {
       toast(normalizeError(err), "err");
     } finally {
@@ -4541,8 +4668,9 @@
   }
 
   async function deleteMaterialEntry(kind, entry, btn) {
+    var displayNumber = materialDisplayNumber(kind, entry.id);
     var ok = await openModal({
-      title: "删除素材 #" + str(entry.id),
+      title: "删除素材 #" + materialDisplayNumber(kind, entry.id),
       body: "删除后这一条不会再出现在素材库里（原文件会先备份）。确定删除吗？",
       okText: "删除", danger: true
     });
@@ -4554,7 +4682,7 @@
         revision: state.materialRevisions[kind] || ""
       });
       applyMaterialWriteResult(kind, result);
-      toast("已删除第 " + entry.id + " 条", "ok");
+      toast("已删除第 " + displayNumber + " 条", "ok");
     } catch (err) {
       toast(normalizeError(err), "err");
     } finally {
@@ -4578,16 +4706,17 @@
     };
   }
 
-  function showTryImage(image) {
+  function showTryImage(image, result) {
     state.tryImage = image;
     var img = $("#try-img");
-    var result = $("#try-result");
+    var preview = $("#try-result");
+    var title = imageCompletionText("试穿预览", result);
     if (img) {
       img.src = image;
-      img.onclick = function () { openImageModal(image, "试穿预览"); };
+      img.onclick = function () { openImageModal(image, title); };
     }
-    if (result) result.hidden = false;
-    openImageModal(image, "试穿预览");
+    if (preview) preview.hidden = false;
+    openImageModal(image, title);
   }
 
   function clearTryPreview() {
@@ -4680,7 +4809,7 @@
       title: "试穿预览会产生费用",
       body: "会调用生图接口生成 1 张试穿图，可能产生实际费用。\n\n本次只用草稿文本试穿：" +
         "不会写入素材库，也不占用服装编号。\n\n地点：" + payload.city + " / " + payload.district + " / " + payload.place +
-        "\n特写：#" + payload.closeup_id,
+        "\n特写：#" + materialDisplayNumber("closeup", payload.closeup_id),
       okText: "确认试穿",
       cancelText: "取消"
     });
@@ -4695,9 +4824,9 @@
           var image = result && result.image !== undefined ? str(result.image) : "";
           if (!image) throw new Error("后端没有返回 image 字段");
           if (image.indexOf("data:image/") !== 0) throw new Error("image 不是 data:image/ 开头的 dataURL");
-          showTryImage(image);
-          setStatus($("#try-status"), "试穿预览完成", "ok");
-          toast("试穿预览完成", "ok");
+          showTryImage(image, result);
+          setStatus($("#try-status"), imageCompletionText("试穿预览完成", result), "ok");
+          toast(imageCompletionText("试穿预览完成", result), "ok");
           if (state.album.loaded) loadAlbum({ page: 0 });
         } catch (err) {
           var message = normalizeError(err);
@@ -8364,6 +8493,7 @@
       refreshTestAvailability();
     });
     var eventAction = $("#t-closeup");
+    eventAction.addEventListener("change", renderSketchPreview);
     if (eventAction) eventAction.addEventListener("change", function () {
       if (state.testActionSource === "event") {
         var index = parseInt(eventAction.value, 10);
@@ -8390,9 +8520,10 @@
         : actionSource.value === "meal" ? "meal"
         : actionSource.value === "sleep" ? "sleep"
         : actionSource.value === "selfie" ? "selfie"
-        : actionSource.value === "interaction" ? "interaction" : "daily";
+        : actionSource.value === "interaction" ? "interaction"
+        : actionSource.value === "sketch" ? "sketch" : "daily";
       if (state.testActionSource === "daily" || state.testActionSource === "selfie"
-          || state.testActionSource === "interaction") {
+          || state.testActionSource === "interaction" || state.testActionSource === "sketch") {
         state.testAction = "";
         var actionBox = $("#t-action");
         if (actionBox) actionBox.value = "";
@@ -8411,6 +8542,17 @@
     var albumNext = $("#album-next");
     if (albumNext) albumNext.addEventListener("click", function () { gotoAlbumPage(1); });
 
+    $("#sketch-refresh").addEventListener("click", async function () {
+      try { applySketchSnapshot(await api({action: "pose_sketches"})); toast("线稿已刷新", "ok"); } catch (err) { toast(normalizeError(err), "err"); }
+    });
+    $("#sketch-upload").addEventListener("click", async function () {
+      var btn = this; var file = $("#sketch-file").files[0];
+      if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 8 * 1024 * 1024) { toast("请选择 8MB 以内的 PNG / JPEG / WebP 图片", "err"); return; }
+      btn.disabled = true;
+      try { var result = await api({action: "save_pose_sketch", image: await fileToDataUrl(file), label: $("#sketch-label").value}); applySketchSnapshot(result.pose_sketches); $("#sketch-file").value = ""; $("#sketch-label").value = ""; setStatus($("#sketch-status"), "上传成功 · 特写 #" + sketchDisplayNumber(result.image.id), "ok"); }
+      catch (err) { setStatus($("#sketch-status"), normalizeError(err), "err"); }
+      finally { btn.disabled = false; }
+    });
     var materialDraft = $("#m-draft");
     if (materialDraft) materialDraft.addEventListener("click", function () { handleMaterialDraft(materialDraft); });
     var materialConfirm = $("#m-confirm");

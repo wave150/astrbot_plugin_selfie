@@ -24,7 +24,8 @@ _ACTIONS = frozenset({"bootstrap", "test", "try_costume", "draft_material", "con
                       "diaries", "schedule", "job", "cancel_job",
                       "ref_library", "save_ref_image", "delete_ref_image", "rename_ref_image",
                       "save_ref_slots", "save_ref_conditions", "ref_image",
-                      "save_ref_costume"})
+                      "save_ref_costume", "pose_sketches", "save_pose_sketch",
+                      "rename_pose_sketch", "delete_pose_sketch", "pose_sketch_image"})
 _BACKGROUND = frozenset({"test", "try_costume", "draft_material", "draft_city", "initialize_world",
                          "generate_event_fragment"})
 # Process-level admission, including overlapping plugin instances during reload.
@@ -91,6 +92,10 @@ _SAFE_MESSAGES = frozenset({
     "这套参考图衣服已经没有名字了，请刷新页面后重新选择",
     "这套衣服没有勾「可摘帽子」，请刷新页面后重试",
     "这套衣服没有勾「可脱外套」，请刷新页面后重试",
+    "请选择线稿参考特写", "线稿特写不存在，请刷新后重试",
+    "线稿参考特写不存在，请刷新线稿列表后重试",
+    "线稿参考特写需要支持至少两张参考图的生图站，请检查主站或副站的参考图张数设置",
+    "线稿参考特写暂不与角色参考图混用，请单独选择线稿动作",
     "请选择日常特写",
     "请选择互动提示词（先在「添加素材」里添加互动）",
     "参考图数据无效，请重新选择图片",
@@ -211,9 +216,14 @@ class WorkspaceAPI:
                 del self._jobs[job_id]
 
     async def _run(self, job, action, payload, owner):
+        started = time.monotonic()
         try:
             async with asyncio.timeout(self.JOB_TIMEOUT):
                 result = await self.service.dispatch(action, payload, owner)
+            if action in self.IMAGE_ACTIONS and isinstance(result, dict):
+                # Whole service task: prompt preparation, retries and downloads;
+                # never include the client's polling delay or mutate service data.
+                result = {**result, "elapsed_seconds": time.monotonic() - started}
             # Do not retain arbitrarily large or non-JSON service responses.
             encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
             if len(encoded.encode("utf-8")) > self.MAX_JSON_BYTES:

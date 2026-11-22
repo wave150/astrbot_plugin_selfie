@@ -17,6 +17,11 @@ REF_ACTIONS = frozenset({
     "save_ref_slots", "save_ref_conditions", "ref_image", "save_ref_costume",
 })
 
+POSE_SKETCH_ACTIONS = frozenset({
+    "pose_sketches", "save_pose_sketch", "rename_pose_sketch",
+    "delete_pose_sketch", "pose_sketch_image",
+})
+
 _DATA_URL_PREFIXES = (
     "data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,",
 )
@@ -55,6 +60,21 @@ def with_builtin(service, snapshot):
 
 def handle(service, action, payload):
     """处理参考图页的动作；返回值直接给前端（含最新快照，省一次 bootstrap）。"""
+    if action in POSE_SKETCH_ACTIONS:
+        library = service.pose_sketch_library()
+        if action == "pose_sketches":
+            return library.snapshot()
+        if action == "pose_sketch_image":
+            thumb = payload.get("thumb", True) is not False
+            return {"image": image_data_url(library.read(payload.get("id"), thumb=thumb), thumb=thumb)}
+        if action == "save_pose_sketch":
+            meta = library.save_image(decode_image_data_url(payload.get("image")), label=payload.get("label"))
+            return {"image": meta, "pose_sketches": library.snapshot()}
+        if action == "rename_pose_sketch":
+            meta = library.rename_image(payload.get("id"), payload.get("label"))
+            return {"image": meta, "pose_sketches": library.snapshot()}
+        result = library.delete_image(payload.get("id"))
+        return dict(result, pose_sketches=library.snapshot())
     library = service.reference_library()
     if action == "ref_library":
         return with_builtin(service, library.snapshot())

@@ -144,14 +144,25 @@ class ImageTransportMixin:
                         single_ref: str | None = None,
                         head_only: bool = False,
                         main_refs: tuple | list | None = None,
-                        backup_refs: tuple | list | None = None) -> bytes:
+                        backup_refs: tuple | list | None = None,
+                        pose_image: str = "") -> bytes:
         api_base, api_key = self._api()
-        if not api_base or not api_key:
+        if (not api_base or not api_key) and not pose_image:
             raise RuntimeError("没有配置生图主站地址或密钥")
         # 只用 OpenAI 兼容接口：主站（模型链）-> 副站（只试一次）
         if True:
             # 用户定的策略：主站（双图，模型链）-> 副站（单图，只试一次）-> 失败就报错
             plan = self._image_plan(model)
+            if pose_image:
+                capable = []
+                for site in plan:
+                    if site[2] >= 2:
+                        capable.append(site)
+                    else:
+                        logger.info(f"[selfie] 线稿参考特写跳过{site[4]}站点：最多支持 {site[2]} 张参考图，需要至少两张")
+                plan = capable
+                if not plan:
+                    raise ValueError("线稿参考特写需要支持至少两张参考图的生图站，请检查主站或副站的参考图张数设置")
             if not plan:
                 plan = [(api_base, api_key, 2, model, "primary")]
             last_err = None
@@ -178,6 +189,7 @@ class ImageTransportMixin:
                         prompt, mdl, base, key, extra_images, style, 1, max_refs,
                         ref=ref, face_ref=face_ref, single_ref=single_ref,
                         head_only=head_only, refs=site_refs or None,
+                        **({"pose_image": pose_image} if pose_image else {}),
                     )
                     logger.info(
                         f"[selfie] 生图成功 {host} / {mdl}，用时 {time.monotonic() - started:.1f}s"
@@ -247,7 +259,8 @@ class ImageTransportMixin:
                                face_ref: str | None = None,
                                single_ref: str | None = None,
                                head_only: bool = False,
-                               refs: tuple | list | None = None) -> bytes:
+                               refs: tuple | list | None = None,
+                               pose_image: str = "") -> bytes:
         """标准 OpenAI 图片接口：有参考图走 /images/edits，否则 /images/generations。
 
         参考图按风格选：二次元版贴二次元三视图，真人版贴真人三视图（真人版再多贴一张脸部特写）。
@@ -263,10 +276,36 @@ class ImageTransportMixin:
         # 单次请求最多等 3 分钟：实测健康时一张图约 40 秒，超过 3 分钟基本是上游
         # 排队/卡住。超时就换下一个模型/副站，别让一张图把 10 分钟全耗在同一条链路上。
         timeout = aiohttp.ClientTimeout(total=180)
-        ref, face_ref = self._openai_refs(style, extra_images, max_refs,
-                                          ref=ref, face_ref=face_ref,
-                                          single_ref=single_ref, head_only=head_only,
-                                          refs=refs)
+        pose_uploads = None
+        if pose_image:
+            if max_refs < 2:
+                raise ValueError("线稿参考特写需要支持至少两张参考图的生图站，请检查主站或副站的参考图张数设置")
+            # 调用方已经把本人面部图排第一，线稿始终第二
+            # 三图站点可保留第三张服装图，两图站点绝不能挤掉脸或线稿
+            identity = next((str(x) for x in (refs or ()) if x), "") \
+                or ref or face_ref or single_ref or ""
+            if not identity:
+                raise RuntimeError("线稿参考特写缺少本人身份参考图，禁止纯文生图")
+            optional = list(dict.fromkeys(str(x) for x in (refs or ())
+                                          if x and str(x) not in (identity, pose_image)))
+            upload_paths = [(identity, "本人身份参考图"), (pose_image, "线稿参考图")]
+            upload_paths += [(x, "服装参考图") for x in optional[:max(0, max_refs - 2)]]
+            pose_uploads = []
+            for path, label in upload_paths:
+                try:
+                    with open(path, "rb") as fh:
+                        content = fh.read()
+                    if not content:
+                        raise ValueError("empty image")
+                except Exception as e:
+                    raise RuntimeError(f"线稿参考特写{label}读取失败，禁止降级生成") from e
+                pose_uploads.append((path, content))
+            ref, face_ref = identity, pose_image
+        else:
+            ref, face_ref = self._openai_refs(style, extra_images, max_refs,
+                                              ref=ref, face_ref=face_ref,
+                                              single_ref=single_ref, head_only=head_only,
+                                              refs=refs)
         # 0 = 连接异常；400/403 = 中转平台随机的 upstream_request_rejected（同一提示词重试可过）
         # 实测同一个请求 400 之后立刻重发就能 200，所以多给几次机会、退避时间也拉长
         retryable = {0, 400, 403, 408, 425, 429, 500, 502, 503, 504}
@@ -287,14 +326,19 @@ class ImageTransportMixin:
                 form.add_field("prompt", prompt)
                 form.add_field("size", size)
                 form.add_field("n", "1")
-                imgs = [ref] + ([face_ref] if face_ref else [])
-                imgs += [x for x in (extra_images or []) if x and os.path.exists(x)]
+                imgs = ([path for path, _ in pose_uploads] if pose_uploads is not None
+                        else [ref] + ([face_ref] if face_ref else []))
+                if not pose_image:
+                    imgs += [x for x in (extra_images or []) if x and os.path.exists(x)]
                 if len(imgs) > max_refs:
                     raise RuntimeError(f"当前服务最多支持 {max_refs} 张参考图，本次需要 {len(imgs)} 张")
                 for idx, img_path in enumerate(imgs):
                     try:
-                        with open(img_path, "rb") as fh:
-                            img_bytes = fh.read()
+                        if pose_uploads is not None:
+                            img_bytes = pose_uploads[idx][1]
+                        else:
+                            with open(img_path, "rb") as fh:
+                                img_bytes = fh.read()
                     except Exception as e:
                         if idx == 0:
                             raise RuntimeError("当前角色身份参考图读取失败，禁止只使用服装参考图生成") from e
@@ -319,7 +363,7 @@ class ImageTransportMixin:
                         logger.warning(f"[selfie] 参考图接口异常（第{attempt}次）: {e!r}")
                         status = 0
                     if status in (404, 405, 422):
-                        if self._allow_text_only():
+                        if not pose_image and self._allow_text_only():
                             logger.warning(
                                 f"[selfie] 参考图接口不可用（HTTP {status}），"
                                 "allow_text_only 已开启，退回纯文生图"
@@ -345,7 +389,7 @@ class ImageTransportMixin:
                     f"重试: {str(data)[:120]}"
                 )
                 if (ref and mode == "edits" and attempt == max_attempts
-                        and self._allow_text_only()):
+                        and not pose_image and self._allow_text_only()):
                     logger.warning(
                         "[selfie] 参考图路线连续失败，allow_text_only 已开启，退回纯文生图再试一次"
                     )
