@@ -13,6 +13,7 @@ import time
 import uuid
 import weakref
 
+from astrbot.api import logger
 from astrbot.api.web import request, json_response, error_response
 
 _ROUTE = "/astrbot_plugin_selfie/workspace"
@@ -23,7 +24,7 @@ _ACTIONS = frozenset({"bootstrap", "test", "try_costume", "draft_material", "con
                       "album_list", "album_thumb", "album_image",
                       "diaries", "schedule", "job", "cancel_job",
                       "ref_library", "save_ref_image", "delete_ref_image", "rename_ref_image",
-                      "save_ref_slots", "save_ref_conditions", "ref_image",
+                      "save_ref_slots", "save_ref_conditions", "ref_image", "save_style_ref",
                       "save_ref_costume", "pose_sketches", "save_pose_sketch",
                       "rename_pose_sketch", "delete_pose_sketch", "pose_sketch_image"})
 _BACKGROUND = frozenset({"test", "try_costume", "draft_material", "draft_city", "initialize_world",
@@ -33,6 +34,8 @@ _ACTIVE = weakref.WeakKeyDictionary()
 
 
 _SAFE_MESSAGES = frozenset({
+    *(f"还没有{label}画风的三视图参考图，请先到「自拍工作台 → 参考图」上传并设置{label}三视图"
+      for label in ("真人", "二次元", "玩偶")),
     '结束后场景已关闭，无法测试',
     '大模型响应超时（单次上限180秒），请减少本次地点数量后重试；已有地点未改动',
     '无法连接大模型服务，请检查服务状态后重试；已有数据未改动',
@@ -143,6 +146,16 @@ def safe_error(exc):
         if message and len(message) <= 80 and "\\" not in message and "/" not in message:
             return message
         return "参考图设置无效，请刷新页面后重试"
+    if isinstance(exc, RuntimeError):
+        message = str(exc).lower()
+        if 'upstream_request_rejected' in message:
+            return '生图上游拒绝了请求（upstream_request_rejected），请检查站点状态与多参考图支持；线稿需要至少两张参考图，单图副站无法接替'
+        if 'content_policy_violation' in message:
+            return '生图服务因内容审核拒绝了本次请求，请检查参考图、动作和提示词后再试'
+        if '生图失败 http 503' in message:
+            return '生图服务暂时不可用（HTTP 503），请稍后重试或检查可用生图站'
+        if '生图超时' in message:
+            return '生图超时，已停止等待，请检查上游排队或服务状态'
     if isinstance(exc, ValueError):
         message = str(exc)
         if message in _SAFE_MESSAGES:
@@ -234,7 +247,10 @@ class WorkspaceAPI:
                 job.update(state="error", error="任务已取消")
             raise
         except Exception as exc:
-            job.update(state="error", error=safe_error(exc))
+            public_error = safe_error(exc)
+            # Log fixed classifications, never arbitrary upstream URLs/credentials or prompts.
+            logger.error(f'[selfie] 工作台任务失败 action={action}, type={type(exc).__name__}, reason={public_error}')
+            job.update(state="error", error=public_error)
         finally:
             job["finished"] = time.monotonic()
 

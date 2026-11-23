@@ -146,18 +146,20 @@ class WorkspaceHostMixin:
         """Explicit paid preview. Do not mutate world, photo memory, or user quotas."""
         if payload.get('confirm_paid') is not True:
             raise ValueError('请确认本次测试会调用生图服务')
+        # Request-local override only: never persist a test style to config/preferences.
+        requested_style = payload['style'] if 'style' in payload else self._style()
+        if not isinstance(requested_style, str) or requested_style not in ('realistic', 'anime', 'doll'):
+            raise ValueError('测试画风无效，请选择 realistic、anime 或 doll')
+        sketch_id = cue_override.get('sketch_id') if isinstance(cue_override, dict) else None
+        style = ('realistic' if sketch_id is not None and requested_style != 'doll'
+                 else requested_style)
         # 测试面板的「素颜」勾选：勾上就强制用参考图页启用并上传的那张素颜三视图，
         # 不用等到 22 点；参考图页没启用时直接告诉用户去启用，不静默忽略。
         bare_face = payload.get('bare_face', False)
         if type(bare_face) is not bool:
             raise ValueError('素颜选项格式无效')
         if bare_face:
-            try:
-                realistic = (self._style() == 'realistic'
-                             or (isinstance(cue_override, dict) and cue_override.get('sketch_id') is not None))
-            except Exception:
-                realistic = True
-            if realistic:
+            if style == 'realistic':
                 suyan = getattr(self, '_ref_sleep_face_image', None)
                 path = suyan() if callable(suyan) else ''
                 if not path:
@@ -191,7 +193,6 @@ class WorkspaceHostMixin:
                                for k in ('name', 'desc'))):
                 raise ValueError('衣服草稿格式无效')
             costume = {'name': costume_override['name'], 'description': costume_override['desc']}
-        sketch_id = cue_override.get('sketch_id') if isinstance(cue_override, dict) else None
         if sketch_id is not None:
             library = self._pose_sketch_library()
             if not library.get(sketch_id) or not library.image_path(sketch_id):
@@ -269,6 +270,8 @@ class WorkspaceHostMixin:
             meta.update({key: value for key, value in album_meta.items()
                          if isinstance(key, str) and (isinstance(value, str) or value is None
                                                       or isinstance(value, (int, float, bool)))})
+        # Record the effective style; doll sketches keep their own doll identity.
+        meta['style'] = style
         # 互动来源：相册记录里标出用的动作词，方便回看是哪一种互动
         if cue_kind and isinstance(meta, dict):
             meta.setdefault("interaction_action", cue_kind)
@@ -286,7 +289,6 @@ class WorkspaceHostMixin:
                         await ensure(scene)
                     except Exception:
                         pass
-                style = 'realistic' if sketch_id is not None else self._style()
                 # 测试面板的参考图覆盖：素颜勾选强制用素颜脸部图，参考图衣服贴那张衣服图
                 refs = None
                 refs_getter = getattr(self, '_workspace_preview_refs', None)

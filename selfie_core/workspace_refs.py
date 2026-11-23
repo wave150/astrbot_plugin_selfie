@@ -15,6 +15,7 @@ from .ref_library import RefLibraryError
 REF_ACTIONS = frozenset({
     "ref_library", "save_ref_image", "delete_ref_image", "rename_ref_image",
     "save_ref_slots", "save_ref_conditions", "ref_image", "save_ref_costume",
+    "save_style_ref",
 })
 
 POSE_SKETCH_ACTIONS = frozenset({
@@ -55,7 +56,10 @@ def with_builtin(service, snapshot):
     旧版本这里会补「内置参考图」信息，现在不再内置任何默认图，直接返回快照；
     保留这个函数名是为了 workspace.bootstrap 不用改调用点。
     """
-    return dict(snapshot)
+    result = dict(snapshot)
+    style_getter = getattr(getattr(service, "host", None), "_style", None)
+    result["current_style"] = style_getter() if callable(style_getter) else "realistic"
+    return result
 
 
 def handle(service, action, payload):
@@ -90,6 +94,9 @@ def handle(service, action, payload):
     if action == "delete_ref_image":
         result = library.delete_image(payload.get("id"))
         return dict(result, library=with_builtin(service, library.snapshot()))
+    if action == "save_style_ref":
+        image_id = payload.get("image_id") if "image_id" in payload else payload.get("id")
+        return with_builtin(service, library.save_style_image(payload.get("style"), image_id))
     if action == "save_ref_slots":
         slots = {"main": payload.get("main"), "backup": payload.get("backup")}
         if "suyan" in payload:

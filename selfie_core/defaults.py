@@ -169,15 +169,23 @@ COAT_OFF_PAT = re.compile(
 # 自拍提示词统一的开头语：睡觉 / 吃饭 / 事件只替换后面的构图与动作，不重复写这句。
 SELFIE_SHOT_INTRO = "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
 
-# 风格只能二选一：二次元动漫 / 写实真人（不要 2.5D 半写实这类混合风格）
+# 风格互斥：二次元动漫 / 写实真人 / 毛绒玩偶实物摄影（不要 2.5D 混合风格）
 STYLE_ANIME = "anime"
 STYLE_REALISTIC = "realistic"
+STYLE_DOLL = "doll"
 STYLE_ALIASES = {
     "anime": STYLE_ANIME, "二次元": STYLE_ANIME, "动漫": STYLE_ANIME,
     "日漫": STYLE_ANIME, "animation": STYLE_ANIME, "2d": STYLE_ANIME,
     "realistic": STYLE_REALISTIC, "real": STYLE_REALISTIC, "photo": STYLE_REALISTIC,
     "写实": STYLE_REALISTIC, "真人": STYLE_REALISTIC, "写实真人": STYLE_REALISTIC,
+    "玩偶": STYLE_DOLL, "毛绒玩具": STYLE_DOLL, "公仔": STYLE_DOLL,
+    "fumo": STYLE_DOLL, "二头身": STYLE_DOLL, "doll": STYLE_DOLL, "布偶": STYLE_DOLL,
 }
+# 显式提及玩偶风格；英文别名不区分大小写。
+_DOLL_STYLE_ALIASES_RE = "|".join(
+    re.escape(alias) for alias, style in STYLE_ALIASES.items() if style == STYLE_DOLL
+)
+DOLL_STYLE_PAT = re.compile(r"(?:" + _DOLL_STYLE_ALIASES_RE + r")", re.IGNORECASE)
 STYLE_BLOCK = {
     STYLE_ANIME: (
         "整张照片的风格只能是纯二次元动漫：日系动画质感、清晰线稿、赛璐璐上色和动漫高光；"
@@ -192,14 +200,31 @@ STYLE_BLOCK = {
         "不是少女也不是儿童；不要动漫大眼睛，不要动漫线条，不要插画平涂，"
         "不要3D渲染，不要2.5D半写实。"
     ),
+    STYLE_DOLL: (
+        "整张照片只能是毛绒玩偶实物摄影：主体是 fumo 风格的布偶公仔，不是真人；"
+        "必须是短小二头身比例，大头、短躯干、短小布制四肢，五官由绣线刺绣呈现，"
+        "毛绒布料纹理、填充棉体积和布料缝线清晰可见；"
+        "服装与动作也按毛绒玩偶结构呈现，不是真人皮肤，不是真实人体或成人身形比例；"
+        "背景与光影采用真实相机拍摄的实物照片质感，不是普通动漫插画，"
+        "不要动漫线稿、赛璐璐平涂、3D渲染或2.5D半写实。"
+    ),
 }
 STYLE_QUALITY = {
     STYLE_ANIME: "成像：精致的二次元插画质感，线条干净，照片清晰，高分辨率。",
     STYLE_REALISTIC: "成像：真实照片质感，皮肤真实，照片清晰锐利，高分辨率。",
+    STYLE_DOLL: (
+        "成像：毛绒玩偶实物摄影，短小二头身比例、绣线五官、毛绒布料与布料缝线清晰，"
+        "真实摄影光影，高分辨率；不是真人皮肤或人体，不是普通动漫插画。"
+    ),
 }
 STYLE_NEGATIVE_EXTRA = {
     STYLE_ANIME: "写实照片, 真人照片, 3D渲染, 2.5D, 半写实, 塑料质感",
     STYLE_REALISTIC: "动漫线条, 插画, 2D, 赛璐璐, 3D渲染, 2.5D, 半写实, 塑料质感",
+    STYLE_DOLL: (
+        "真人, 真人皮肤, 皮肤纹理, 毛孔, 真实人体, 成人身形比例, 修长四肢, "
+        "普通动漫插画, 动漫线条, 2D, 赛璐璐, 平涂, 3D渲染, 2.5D, 半写实, "
+        "塑料质感, 硬质手办"
+    ),
 }
 
 SELFIE_PAT = re.compile(
@@ -423,12 +448,20 @@ COS_STOPWORDS = (
 )
 # cos 触发：同时出现「cos」和自拍请求才算 cosplay
 COS_KEYWORD_PAT = re.compile(r"cos", re.I)
-# 「自拍风格改为二次元 / 以后都用写实」这类长期风格偏好
+# 「自拍风格改为二次元 / 以后都用写实 / 我喜欢fumo」这类长期风格偏好。
+# 最长别名优先，且只捕获别名本身，不能把后续「自拍」等请求一起吃掉。
+_STYLE_PREF_ALIAS_RE = "|".join(
+    re.escape(alias) for alias in sorted(STYLE_ALIASES, key=len, reverse=True)
+)
 STYLE_PREF_PAT = re.compile(
     r"(?:自拍|拍照|照片)?(?:的)?(?:风格|画风)\s*"
-    r"(?:改成|改为|换成|变成|设为|设置为|调成)\s*([\u4e00-\u9fa5A-Za-z]{1,8})"
+    r"(?:改成|改为|换成|变成|设为|设置为|调成)\s*(" + _STYLE_PREF_ALIAS_RE + r")",
+    re.IGNORECASE,
 )
-STYLE_PREF_PAT2 = re.compile(r"以后(?:都)?(?:用|要|给我拍|拍)\s*([\u4e00-\u9fa5A-Za-z]{1,8})")
+STYLE_PREF_PAT2 = re.compile(
+    r"(?:以后(?:都)?(?:用|要|给我拍|拍)|(?:我)?喜欢)\s*(" + _STYLE_PREF_ALIAS_RE + r")",
+    re.IGNORECASE,
+)
 # 「去 xx 拍一张」「换个场景 / 换背景」——她不被要求改地点
 SCENE_REQ_PAT = re.compile(r"(换个?场景|换场景|换背景|背景换成|背景改成|去.{1,10}?(?:拍|自拍|来一张))")
 COS_YES_PAT = re.compile(

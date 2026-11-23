@@ -404,6 +404,15 @@
         <section class="card">
           <h2 class="card-title">服装与动作</h2>
           <p class="card-hint">场景由上面的地点决定（选「事件」地点就是事件场景），服装和动作的来源各自独立：先选来源，再选具体条目。</p>
+          <div class="field">
+            <label class="field-label" for="t-style">画风</label>
+            <select class="input" id="t-style">
+              <option value="realistic">真人</option>
+              <option value="anime">二次元</option>
+              <option value="doll">玩偶</option>
+            </select>
+            <div class="field-hint" id="t-style-hint">仅用于本次测试，不修改全局画风或用户偏好；需要先设置对应画风的三视图</div>
+          </div>
           <div class="grid-2">
             <div class="field">
               <label class="field-label" for="t-costume-source">服装来源</label>
@@ -810,7 +819,7 @@
 
       <section class="card">
         <h2 class="card-title">上传参考图</h2>
-        <p class="card-hint">点下面的按钮从本地选图片上传（支持 JPEG / PNG / WebP，单张不超过 8MB）。第一次用：先上传一张正面全身或大半身的角色图，裁好后在主站参考图 1 里选它并保存；上传只是把图加进图片墙，不会自动替换槽位</p>
+        <p class="card-hint">各画风必须上传自己的正面 / 侧面 / 背面三视图（支持 JPEG / PNG / WebP，单张不超过 8MB）<br>真人三视图填入主站参考图 1，二次元和玩偶三视图在下面按画风设置，上传只加入图片墙，不会自动填槽位，不同画风不会互相借图</p>
         <input id="ref-file" type="file" accept="image/*" hidden />
         <div class="row-actions">
           <button class="btn btn-primary" id="ref-pick" type="button">打开本地文件</button>
@@ -819,7 +828,7 @@
       </section>
 
       <section class="card">
-        <h2 class="card-title">主站参考图</h2>
+        <h2 class="card-title">真人画风 · 主站参考图</h2>
         <p class="card-hint">主站参考图决定生图时人物的长相和身体；勾上「生图站支持双参考图」后可以同时用一张全身图和一张头部图，没勾时只用第 1 个槽位</p>
         <label class="switch"><input type="checkbox" id="ref-main-dual" /> 生图站支持双参考图</label>
         <div class="ref-slot-grid" id="ref-main-slots"></div>
@@ -839,6 +848,12 @@
         <div id="ref-backup-wrap" hidden>
           <div class="ref-slot-grid" id="ref-backup-slots"></div>
         </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">二次元 / 玩偶三视图</h2>
+        <p class="card-hint">先用上面的「打开本地文件」上传对应画风的三视图，再分别选择并保存<br>二次元只用二次元三视图，玩偶只用玩偶三视图，未设置时会提示先上传，不会拿真人参考图替代</p>
+        <div class="grid-2" id="ref-style-images"></div>
       </section>
 
       <section class="card">
@@ -972,6 +987,7 @@
     testSleepwearPick: null,
     testCostumeSource: "daily",
     testActionSource: "daily",
+    testStyle: "",
     testEventId: "",
     album: { items: [], page: 0, pageSize: 24, total: 0, loaded: false, loading: false, observers: [] },
     tryLocation: { city: "", district: "", place: "" },
@@ -3903,8 +3919,8 @@
     if ((state.testCostumeSource === "event" || state.testActionSource === "event") && !testEvent()) {
       reasons.push("来源选了事件素材：需要先选一个事件");
     }
-    if (!refSlotsFilled()) {
-      reasons.push("参考图页还没有填参考图：去「参考图」页上传并填好主站 / 副站参考图");
+    if (!refSlotsFilled(testStyle())) {
+      reasons.push(testStyleLabel(testStyle()) + "画风还没有三视图参考图，请到「参考图」页上传并设置");
     }
     var costumeNode = $("#t-costume");
     if (state.testCostumeSource === "daily") {
@@ -3955,7 +3971,27 @@
     return !!(lib && lib.suyan && lib.suyan.enabled && str(lib.suyan.image));
   }
 
+  function testStyle() {
+    var selected = state.testStyle || str((state.referenceLibrary || {}).current_style);
+    if (state.testActionSource === "sketch" && selected !== "doll") return "realistic";
+    return selected === "anime" || selected === "doll" ? selected : "realistic";
+  }
+
+  function testStyleLabel(style) {
+    return style === "anime" ? "二次元" : style === "doll" ? "玩偶" : "真人";
+  }
+
   function refreshTestAvailability() {
+    var style = testStyle();
+    var styleNode = $("#t-style");
+    if (styleNode) {
+      styleNode.value = style;
+      styleNode.disabled = false;
+    }
+    var styleHint = $("#t-style-hint");
+    if (styleHint) styleHint.textContent = state.testActionSource === "sketch"
+      ? "指定线稿时：玩偶使用自己的玩偶三视图，缺图请先到参考图页上传；其它画风沿用真人线稿规则"
+      : "仅用于本次测试，不修改全局画风或用户偏好；需要先设置" + testStyleLabel(style) + "三视图";
     var reasons = testAvailability();
     var btn = $("#t-go");
     if (btn) btn.disabled = reasons.length > 0 || anyBusy();
@@ -3964,12 +4000,12 @@
     /* 素颜勾选只在参考图页启用并上传了素颜三视图后才可用 */
     var bareBox = $("#t-bare-face");
     if (bareBox) {
-      var ready = suyanRefReady();
+      var ready = style === "realistic" && suyanRefReady();
       bareBox.disabled = !ready;
       if (!ready) bareBox.checked = false;
       var bareHint = $("#t-bare-hint");
       if (bareHint) {
-        bareHint.textContent = ready
+        bareHint.textContent = style !== "realistic" ? "素颜只适用于真人画风，当前画风使用自己的三视图参考图" : ready
           ? "勾上后这张测试图强制用「参考图」页启用并上传的那张素颜三视图，不用等到 22:00；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。"
           : "参考图页还没有启用素颜：先去「参考图」页勾上「启用素颜」并上传一张素颜三视图照片，这里才能勾选；只在写实风格下生效。服装来源选「参考图衣服」时，下拉里的档位全部来自参考图页：给一张图点「衣服设置」起个衣服名字，勾过「可摘帽子 / 可脱外套」的还会多出对应档位，改名后这里会同步更新。";
       }
@@ -4342,6 +4378,7 @@
     var sceneText = testSceneValue();
     var sceneMode = testSceneMode();
     var payload = {
+      style: testStyle(),
       mode: sceneMode,
       city: location.city,
       district: str(selection.district || location.district),
@@ -4462,7 +4499,7 @@
       : "场景：日常 / " + str(payload.place);
     var confirmBody = "这次会用生图接口生成 1 张测试图，可能产生实际费用。\n\n" +
       sceneLine + "\n城市：" + str(payload.city) + " / " + str(payload.district) +
-      "\n" + costumeLine + "\n" + actionLine +
+      "\n画风：" + testStyleLabel(payload.style) + "\n" + costumeLine + "\n" + actionLine +
       (payload.bare_face ? "\n脸部：素颜三视图（卸妆脸参考图）" : "") +
       (sceneText ? "\n场景描述：" + sceneText.length + " 字" : "");
     var confirmed = await openModal({
@@ -7154,6 +7191,8 @@
     if (!types.length) types = REF_TYPES.slice();
     return {
       images: images,
+      current_style: str(raw.current_style) || str((state.referenceLibrary || {}).current_style) || "realistic",
+      style_images: {anime: str((raw.style_images || {}).anime), doll: str((raw.style_images || {}).doll)},
       main: {
         dual: mainRaw.dual === undefined || mainRaw.dual === null ? true : !!mainRaw.dual,
         body: str(mainRaw.body),
@@ -7326,10 +7365,12 @@
   }
 
   /* 主站或副站至少填了一张图，出图才有参考图可用 */
-  function refSlotsFilled() {
+  function refSlotsFilled(style) {
     var lib = state.referenceLibrary;
     if (!lib) return false;
-    return !!(str(lib.main.body) || str(lib.main.head) || str(lib.backup.image));
+    style = style || lib.current_style;
+    if (style === "anime" || style === "doll") return !!str((lib.style_images || {})[style]);
+    return !!(str(lib.main.body) || (lib.backup.enabled && str(lib.backup.image)));
   }
 
   async function handleAdoptBuiltin(btn) {
@@ -8405,11 +8446,36 @@
 
   /* ---------- 渲染入口（bootstrap 还没回来时安全返回） ---------- */
 
+  function renderStyleReferences() {
+    var host = $("#ref-style-images"); clear(host);
+    var lib = state.referenceLibrary;
+    [["anime", "二次元"], ["doll", "玩偶 / fumo"]].forEach(function (style) {
+      var field = document.createElement("div"); field.className = "field";
+      var label = document.createElement("label"); label.className = "field-label";
+      label.textContent = style[1] + "三视图"; field.appendChild(label);
+      var select = document.createElement("select"); select.className = "input";
+      select.id = "ref-style-" + style[0]; label.htmlFor = select.id;
+      var empty = document.createElement("option"); empty.value = ""; empty.textContent = "未设置，请上传并选择三视图"; select.appendChild(empty);
+      lib.images.forEach(function (image) {
+        var option = document.createElement("option"); option.value = image.id; option.textContent = image.label; select.appendChild(option);
+      });
+      select.value = (lib.style_images || {})[style[0]] || ""; field.appendChild(select);
+      var save = document.createElement("button"); save.type = "button"; save.className = "btn btn-primary"; save.textContent = "保存" + style[1] + "三视图";
+      save.onclick = async function () {
+        save.disabled = true;
+        try { applyRefLibrary(await api({action: "save_style_ref", style: style[0], id: select.value})); toast("已保存" + style[1] + "三视图", "ok"); }
+        catch (err) { toast(normalizeError(err), "err"); }
+        finally { save.disabled = false; }
+      }; field.appendChild(save); host.appendChild(field);
+    });
+  }
+
   function renderRefPanel() {
     var lib = state.referenceLibrary;
     if (!lib) return;
     renderRefTakeover();
     renderRefSlots();
+    renderStyleReferences();
     renderRefWall();
     renderRefConditions();
   }
@@ -8467,6 +8533,11 @@
     if (testCancel) testCancel.addEventListener("click", function () { cancelTestJob(testCancel); });
     var paid = $("#t-paid");
     if (paid) paid.addEventListener("change", refreshTestAvailability);
+    var stylePick = $("#t-style");
+    if (stylePick) stylePick.addEventListener("change", function () {
+      state.testStyle = stylePick.value;
+      refreshTestAvailability();
+    });
     var homeJump = $("#t-go-home");
     if (homeJump) homeJump.addEventListener("click", jumpToHomeTest);
     var testScene = $("#t-scene");

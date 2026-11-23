@@ -174,10 +174,16 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                         single_ref: str | None = None,
                         head_only: bool = False,
                         main_refs=None, backup_refs=None, pose_image: str = "") -> bytes:
+        selected_style = self._style(style) if hasattr(self, "_style") else style
+        require = getattr(self, "_require_style_reference", None)
+        if require is not None:
+            require(selected_style)
+        if selected_style == STYLE_DOLL:
+            prompt = self._doll_photo_prompt(prompt)
         use_case = getattr(self, "_photo_use_case", None)
         if use_case is None:
             use_case = self._photo_use_case = PhotoUseCase(self._generate_impl)
-        request = PhotoRequest(prompt, model, style,
+        request = PhotoRequest(prompt, model, selected_style,
                                tuple(negative_extra or ()), tuple(extra_images or ()),
                                ref or "", face_ref or "", single_ref or "",
                                head_only=bool(head_only),
@@ -205,6 +211,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if text == "线稿参考特写需要支持至少两张参考图的生图站，请检查主站或副站的参考图张数设置":
             return text
         if text == "线稿参考特写不存在，请刷新线稿列表后重试":
+            return text
+        if text.startswith("还没有") and "画风的三视图参考图" in text:
             return text
         if "还没有可用的参考图" in text or ("参考图" in text and "上传" in text):
             return ("我还没有可以参考的照片：打开插件页「自拍工作台 → 参考图」，"
@@ -701,6 +709,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         """从用户这句话里判断有没有点名风格（二次元 / 写实真人）。"""
         if not text:
             return None
+        if DOLL_STYLE_PAT.search(text):
+            return STYLE_DOLL
         if REAL_STYLE_PAT.search(text):
             return STYLE_REALISTIC
         if ANIME_STYLE_PAT.search(text):
@@ -1119,13 +1129,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         prefs = self.state.get("style_prefs")
         if isinstance(prefs, dict):
             val = prefs.get(str(sender))
-            if val in (STYLE_ANIME, STYLE_REALISTIC):
+            if val in (STYLE_ANIME, STYLE_REALISTIC, STYLE_DOLL):
                 return val
         return ""
 
     def _set_user_style(self, sender: str, style: str) -> None:
         sender = str(sender or "").strip()
-        if not sender or style not in (STYLE_ANIME, STYLE_REALISTIC):
+        if not sender or style not in (STYLE_ANIME, STYLE_REALISTIC, STYLE_DOLL):
             return
         prefs = self.state.get("style_prefs")
         if not isinstance(prefs, dict):
@@ -1678,7 +1688,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             if not url:
                 continue
             out.append({
-                "name": str(item.get("name") or name),
+                "name": str(item.get("name") or ""),
                 "url": str(url),
                 "source": "bangumi",
             })
@@ -1703,7 +1713,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 thumb = (page.get("thumbnail") or {}).get("source")
                 if thumb:
                     out.append({
-                        "name": str(page.get("title") or name),
+                        "name": str(page.get("title") or ""),
                         "url": str(thumb),
                         "source": "moegirl",
                     })
@@ -1737,8 +1747,156 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 logger.info(f"[selfie] 萌娘百科搜索兜底失败: {e!r}")
         return out[:COS_MAX_CANDIDATES]
 
-    async def _search_character_images(self, name: str) -> list[dict]:
-        """搜角色图：Bangumi 优先，萌娘百科兜底；返回带本地路径的候选列表。"""
+    async def _cos_search_chat(self, prompt: str, image_paths=None) -> str:
+        """只复用 AstrBot 模型，不擅自调用生图中转站的文字接口"""
+        provider = None
+        try:
+            pid = self._caption_provider_id()
+            if pid:
+                provider = self.context.get_provider_by_id(pid)
+        except Exception:
+            provider = None
+        if provider is None:
+            provider = self.context.get_using_provider()
+        if provider is None:
+            return ""
+        response = await provider.text_chat(prompt=prompt, image_urls=list(image_paths or []))
+        return str(getattr(response, "completion_text", "") or "")
+
+    async def _search_cos_anilist(self, query: str) -> list[dict]:
+        # Independent character index with the actual character and work names
+        data = await asyncio.to_thread(
+            self._requests_json, "https://graphql.anilist.co", method="POST", timeout=5,
+            json_body={"query": "query ($q: String!) { Page(perPage: 5) { characters(search: $q) { name { full native alternative } image { large } media(perPage: 3, sort: POPULARITY_DESC) { nodes { title { romaji english native } } } } } }",
+                       "variables": {"q": query}})
+        rows = []
+        for character in (((data.get("data") or {}).get("Page") or {}).get("characters") or []):
+            names = character.get("name") or {}
+            url = (character.get("image") or {}).get("large")
+            titles = [title for node in (character.get("media") or {}).get("nodes", [])
+                      for title in (node.get("title") or {}).values() if title]
+            for name in (names.get("full"), names.get("native"), *(names.get("alternative") or [])):
+                if name and url:
+                    rows.append({"name": name, "url": url, "source": "anilist", "works": titles})
+        return rows
+
+    async def _search_cos_wikipedia(self, query: str) -> list[dict]:
+        # Search full-text rather than treating the model's query as a page title
+        data = await asyncio.to_thread(
+            self._requests_json, "https://en.wikipedia.org/w/api.php", timeout=5,
+            params={"action": "query", "generator": "search", "gsrsearch": query,
+                    "gsrlimit": "4", "prop": "pageimages", "piprop": "thumbnail",
+                    "pilicense": "any", "pithumbsize": "800", "format": "json"})
+        rows = []
+        for page in ((data.get("query") or {}).get("pages") or {}).values():
+            url = (page.get("thumbnail") or {}).get("source")
+            if page.get("title") and url:
+                rows.append({"name": page["title"], "url": url, "source": "wikipedia"})
+        return rows
+
+    async def _search_cos_web_images(self, query: str) -> list[dict]:
+        # Only use the user's already enabled AstrBot image-search service
+        settings = self.context.get_config().get("provider_settings") or {}
+        if (not settings.get("web_search") or settings.get("websearch_provider") != "serpapi"
+                or not settings.get("websearch_serpapi_key")):
+            return []
+        try:
+            from astrbot.core.tools.web_search_tools import _serpapi_request
+            data = await asyncio.wait_for(
+                _serpapi_request(settings, {"q": query}, engine="google_images_light"), timeout=7)
+        except Exception:
+            # External backend exceptions may contain credentials in request URLs
+            logger.debug("[selfie] AstrBot 图片搜索未返回结果，继续尝试百科来源")
+            return []
+        rows = []
+        for item in (data.get("images_results") or [])[:6]:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("original") or item.get("thumbnail")
+            if isinstance(url, str) and url.startswith(("https://", "http://")) and item.get("title"):
+                rows.append({"name": str(item["title"]), "url": url, "source": "serpapi-image"})
+        return rows
+
+    async def _search_cos_quick_candidates(self, name: str, *, excluded_urls=()) -> list[dict]:
+        # The model supplies the query, including work/outfit where known
+        tasks = {asyncio.create_task(self._search_bangumi(name)),
+                 asyncio.create_task(self._search_moegirl(name)),
+                 asyncio.create_task(self._search_cos_anilist(name)),
+                 asyncio.create_task(self._search_cos_wikipedia(name)),
+                 asyncio.create_task(self._search_cos_web_images(name))}
+        try:
+            while tasks:
+                done, pending = await asyncio.wait(tasks, timeout=8, return_when=asyncio.FIRST_COMPLETED)
+                if not done:
+                    raise asyncio.TimeoutError("角色搜索网站响应超时")
+                rows = []
+                for task in done:
+                    try:
+                        rows.extend(task.result())
+                    except Exception as exc:
+                        logger.debug(f"[selfie] 角色搜索来源失败: {exc!r}")
+                # 不让快速但不相干的结果截住另一个来源
+                normalized = re.sub(r"[\W_]", "", name).casefold()
+                def eligible(row):
+                    title = re.sub(r"[\W_]", "", str(row.get("name") or "")).casefold()
+                    return row.get("url") not in excluded_urls and (
+                        row.get("source") == "serpapi-image" or
+                        bool(normalized and title and (normalized in title or title in normalized)))
+                rows = [row for row in rows if eligible(row)]
+                if rows:
+                    # Give a second source a short chance, so a rejected or poor
+                    # first image does not always hide the other site's photo.
+                    if pending:
+                        extra, _ = await asyncio.wait(pending, timeout=1.0)
+                        for task in extra:
+                            try:
+                                rows.extend(row for row in task.result() if eligible(row))
+                            except Exception as exc:
+                                logger.debug(f"[selfie] 角色搜索来源失败: {exc!r}")
+                    # Reserve room for another source under the per-query image budget
+                    primary = rows[0]
+                    return [primary, *sorted((row for row in rows if row is not primary),
+                                             key=lambda row: row.get("source") == primary.get("source"))]
+                tasks = pending
+            return []
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _search_character_images(self, name: str, *, rejected=()) -> list[dict]:
+        """默认智能消歧，人物匹配且可辨主要服装即可；关闭开关保留旧搜索"""
+        if bool(self._cfg("cos_smart_search", True)):
+            try:
+                from .selfie_core.cos_search import search_cos_images
+            except ImportError:
+                from selfie_core.cos_search import search_cos_images
+            async def store(data, label):
+                return self._store_cos_image(data, label)
+            hint = str(self._cfg("cos_search_hint", "") or "").strip()[:500]
+            request = name + ("\n用户配置的搜索偏好：" + hint if hint else "")
+            excluded_urls = {row.get("url") for row in rejected if isinstance(row, dict)}
+            async def search(query):
+                return await self._search_cos_quick_candidates(query, excluded_urls=excluded_urls)
+            result = await search_cos_images(
+                request, chat=self._cos_search_chat, search=search,
+                download=self._download_image, store=store, rejected=rejected)
+            logger.info(f"[selfie] 智能 cos 搜索「{name}」: {result.reason}，{len(result.items)} 张候选")
+            if not result.items:
+                messages = {
+                    "timeout": "这次找角色图等得有点久，先停下了，可以补充作品名后再试",
+                    "search_error": "角色图片来源暂时访问失败，可以稍后重试或补充角色的其它名字",
+                    "download_error": "搜到了候选，但图片暂时下载失败，可以稍后再试",
+                    "store_error": "角色图片保存失败，请检查插件数据目录是否可写",
+                    "no_model": "没有可用的角色识别模型，请在 AstrBot 配置图片转述模型",
+                    "model_error": "角色识别模型调用失败，请查看 AstrBot 的模型调用日志",
+                    "parse_error": "角色识别模型没有返回有效结果，可以补充作品或角色全名后重试",
+                    "verification_error": "候选图片的看图核验没有成功，请查看 AstrBot 的模型调用日志",
+                }
+                raise ValueError(messages.get(result.reason,
+                    f"暂时没找到人物匹配且能看清主要服装的「{name}」图片，可以补充作品名或服装描述后再找"))
+            return result.items
         raw = await self._search_bangumi(name)
         if not raw:
             raw = await self._search_moegirl(name)
@@ -2230,13 +2388,36 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                                     main_refs=(self_ref,), backup_refs=(self_ref,))
 
     async def _start_cos_request(self, event, sender: str, cos_name: str,
-                                 mode: str = "selfie", cue: dict | None = None) -> None:
+                                 mode: str = "selfie", cue: dict | None = None, *, rejected=()) -> None:
+        smart = bool(self._cfg("cos_smart_search", True))
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        previous = self.state.get("cos_pending") or {}
+        base_query = str(previous.get("base_query") or previous.get("query") or "")
+        same_session = (previous.get("umo") == umo and str(previous.get("sender")) == str(sender)
+                        and self.clock.time() - float(previous.get("ts") or 0) <= COS_PENDING_TTL)
+        if smart and same_session and (rejected or cos_name in (base_query, previous.get("query"))):
+            rejected = (*(previous.get("rejected") or []), *rejected)
+            if cos_name == base_query:
+                cos_name = str(previous.get("query") or cos_name)
+        else:
+            base_query = cos_name
+        rejected = list({(row.get("url"), row.get("digest")): {"url": row.get("url"), "digest": row.get("digest")}
+                         for row in rejected if isinstance(row, dict)}.values())[-12:]
         try:
-            await event.send(MessageChain([Plain(f"我去搜一下「{cos_name}」长什么样～")]))
-            candidates = await self._search_character_images(cos_name)
+            # 保留纠正上下文，但不允许在新搜索完成前确认旧图
+            self.state["cos_pending"] = ({"umo": umo, "sender": str(sender), "query": cos_name,
+                                          "mode": mode, "cue": cue or {}, "ts": self.clock.time(),
+                                          "base_query": base_query, "candidates": [],
+                                          "rejected": rejected} if smart else {})
+            self._save_state()
+            await event.send(MessageChain([Plain("我按你补充的条件重新找一下～" if rejected else f"我去搜一下「{cos_name}」长什么样～")]))
+            candidates = await self._search_character_images(cos_name, rejected=rejected)
             if not candidates:
                 await event.send(MessageChain([
-                    Plain(f"没搜到「{cos_name}」的图……给我个日文名/英文名，或者说得更具体一点？")
+                    Plain((f"暂时没找到人物匹配且能看清主要服装的「{cos_name}」图片，"
+                           "可以补充作品名、角色全名或服装描述后再试"
+                           if bool(self._cfg("cos_smart_search", True)) else
+                           f"没搜到「{cos_name}」的图……给我个日文名/英文名，或者说得更具体一点？"))
                 ]))
                 return
             self._prune_cos_files()
@@ -2244,8 +2425,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 "umo": str(getattr(event, "unified_msg_origin", "") or ""),
                 "sender": str(sender),
                 "query": cos_name,
+                "base_query": base_query,
                 "candidates": candidates,
                 "idx": 0,
+                "rejected": rejected,
                 "ts": self.clock.time(),
                 # mode=closeup 表示这次 cos 是「特写 cosplay」，确认后走特写流程
                 "mode": mode,
@@ -2255,9 +2438,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             first = candidates[0]
             await event.send(MessageChain([
                 Image.fromFileSystem(first["path"]),
-                Plain(f"我找到的是「{first['name']}」，是这个角色吗？（回「是」我就开始 cos；不是的话我换一张）"),
+                Plain(f"我找到的是「{first['name']}」" +
+                      (f" · {first['work']}" if first.get('work') else "") +
+                      "，是这个角色和服装吗？（回「是」开始 cos；回「不是」换一张，也可以补充作品或服装描述重新找）"),
             ]))
             logger.info(f"[selfie] cos 候选已发送: {first['name']}（{first.get('source')}）")
+        except ValueError as e:
+            logger.info(f"[selfie] cos 搜索未完成: {e}")
+            await event.send(MessageChain([Plain(str(e))]))
         except Exception as e:
             logger.error(f"[selfie] 搜索 cos 角色失败: {e!r}")
             try:
@@ -2267,11 +2455,37 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         finally:
             self._generating = False
 
+    def _cos_refinement_query(self, pending: dict, text: str) -> str:
+        """否定后的补充保留原角色，最新纠正优先；纯否定仍换旧候选"""
+        if not bool(self._cfg("cos_smart_search", True)):
+            return ""
+        correction = re.sub(r"^(?:不是|不对|错了)[，,。\s]*", "", text.strip()).strip()
+        if correction == text.strip():
+            return ""
+        meaningful = re.sub(r"[，,。！？!?\s]", "", correction)
+        if meaningful in ("", "的", "这个", "那个", "这张", "那张", "换一张", "再换一张", "再找找", "换个", "换一个"):
+            return ""
+        original = str(pending.get("query") or "")[:2400]
+        return f"原请求：{original}\n用户最新纠正（优先于先前推测）：{correction[:600]}"
+
     async def _next_cos_candidate(self, event) -> None:
         pending = self.state.get("cos_pending")
         if not isinstance(pending, dict):
             return
         text = self._clean_text(event)
+        refinement = self._cos_refinement_query(pending, text)
+        if bool(self._cfg("cos_smart_search", True)):
+            rejected = list(pending.get("rejected") or [])
+            candidates = pending.get("candidates") or []
+            idx = int(pending.get("idx") or 0)
+            if 0 <= idx < len(candidates):
+                rejected.append(candidates[idx])
+            await self._start_cos_request(
+                event, str(event.get_sender_id()), refinement or str(pending.get("query") or ""),
+                str(pending.get("mode") or "selfie"),
+                pending.get("cue") if isinstance(pending.get("cue"), dict) else None,
+                rejected=rejected)
+            return
         new_name = self._detect_cos(text)
         if not new_name:
             # 「不是，是雷姆」：从否定句里把新角色名抠出来
@@ -2310,13 +2524,14 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         item = candidates[idx]
         await event.send(MessageChain([
             Image.fromFileSystem(item["path"]),
-            Plain(f"那这张呢？「{item['name']}」"),
+            Plain(f"那这张呢？「{item['name']}」" +
+                  (f" · {item['work']}" if item.get('work') else "")),
         ]))
 
     async def _handle_cos_confirmation(self, event, text: str) -> bool:
         """处理「是不是这个角色」的回复。返回 True 表示已消费这条消息。"""
         pending = self.state.get("cos_pending")
-        if not isinstance(pending, dict) or not pending.get("candidates"):
+        if not isinstance(pending, dict) or not pending.get("query"):
             return False
         if pending.get("umo") != str(getattr(event, "unified_msg_origin", "") or ""):
             return False
@@ -2325,6 +2540,12 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if self.clock.time() - float(pending.get("ts") or 0) > COS_PENDING_TTL:
             self.state["cos_pending"] = {}
             self._save_state()
+            return False
+        # 先处理带补充说明的纠正，不能被长度限制或宽泛的「是」匹配吞掉
+        if self._cos_refinement_query(pending, text):
+            await self._next_cos_candidate(event)
+            return True
+        if not pending.get("candidates"):
             return False
         # 太长的句子当普通聊天，不当成确认/否认
         new_name = self._detect_cos(text)
@@ -2342,7 +2563,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             )
             return True
         core = re.sub(r"[吧呢啊嘛呀哦的啦~。!?，,.\s]+$", "", text.strip())
-        if COS_NO_PAT.search(core) or core in ("不", "否"):
+        if COS_NO_PAT.search(core) or core in ("不", "否", "换一张", "再换一张", "再找找"):
             await self._next_cos_candidate(event)
             return True
         if not COS_YES_PAT.match(core):
@@ -2446,6 +2667,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if (cue or {}).get("sketch_id") is not None:
             if cos_name:
                 raise ValueError("线稿参考特写暂不与角色参考图混用，请单独选择线稿动作")
+            if style == STYLE_DOLL:
+                return await self._generate_sketch_closeup(
+                    scene, model, look, cue, refs=refs, style=STYLE_DOLL)
             return await self._generate_sketch_closeup(scene, model, look, cue, refs=refs)
         cue_text = self._clean_closeup_cue((cue or {}).get("text"))
         # cos 特写最多两张参考图：她自己 + 角色图，不再额外掺素颜参考图，免得超过站点张数上限
@@ -2529,13 +2753,42 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         return await self._generate(prompt, model, style, neg, **gen_refs)
 
     async def _generate_sketch_closeup(self, scene: dict, model: str, look: dict,
-                                       cue: dict, refs: tuple | None = None) -> bytes:
+                                       cue: dict, refs: tuple | None = None,
+                                       style: str = STYLE_REALISTIC) -> bytes:
         """线稿始终是第二张图，只取动作与机位，不使用线稿的人物外观"""
         library = self._pose_sketch_library()
         item = library.get(cue.get("sketch_id"))
         pose_image = library.image_path(cue.get("sketch_id")) if item else ""
         if not pose_image:
             raise ValueError("线稿参考特写不存在，请刷新线稿列表后重试")
+        if style == STYLE_DOLL:
+            # 玩偶身份只取独立玩偶三视图，不接收真人覆盖、面部、素颜或衣服身份图
+            doll_ref = self._require_style_reference(STYLE_DOLL)
+            action = (
+                "参考图2仅提供动作、身体朝向、支撑接触关系、镜头角度和构图裁切，"
+                "将动作合理改编为二头身玩偶的短小四肢，不复制线稿人体比例或外观"
+            )
+            identity = (
+                "玩偶身份硬约束（最高优先级）：参考图1是唯一身份参考，最终主体必须是"
+                "其三视图中的同一只毛绒玩偶，严格保留头部形状、刺绣五官、布料颜色、"
+                "发型与装饰、二头身头身比例、短小四肢、绒布材质与缝线，禁止换成另一只玩偶"
+                "参考图2只是动作线稿，不提供身份、五官、材质或最终画风"
+            )
+            prompt = self._closeup_prompt(
+                scene, model, STYLE_DOLL, look, {"text": action},
+                refs=(doll_ref, None, doll_ref))
+            prompt = await self._scene_adapt_prompt(prompt, scene, look, action)
+            prompt = identity + "\n" + prompt + "\n" + identity + "\n" + action
+            prompt += (
+                "\n最终是毛绒玩偶实物摄影，服装制成玩偶小衣服，不生成真人或人体皮肤，"
+                "不变成普通动漫插画，不把线稿线条画进成片"
+            )
+            # 不沿用真人线稿分支的「人偶质感 / 塑料皮肤」等冲突负词
+            negative = ["线稿描边", "白描成片", "素描成片", "人体比例", "真人皮肤",
+                        "替换玩偶身份", "融合线稿人物长相", "参考图2的脸", "普通动漫插画"]
+            return await self._generate(
+                prompt, model, STYLE_DOLL, negative,
+                main_refs=(doll_ref,), backup_refs=(doll_ref,), pose_image=pose_image)
         style = STYLE_REALISTIC
         if refs is None:
             gen_refs = self._generation_refs(scene, style, look)
@@ -2643,7 +2896,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             # 只要特写提示词）；场景仍沿用事件当前地点。
             scene = self._event_photo_scene(await self._get_scene())[0]
             model = str(self._cfg("model", DEFAULT_SELFIE_MODEL))
-            style = STYLE_REALISTIC if (cue or {}).get("sketch_id") is not None else self._style(style_override)
+            style = self._style(style_override)
+            if (cue or {}).get("sketch_id") is not None and style != STYLE_DOLL:
+                style = STYLE_REALISTIC
             await self._ensure_ref_day(scene)
             cos_name = str((cand or {}).get("name") or "")
             char_path = str((cand or {}).get("path") or "")
@@ -3692,9 +3947,44 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             logger.warning(f"[selfie] 读取参考图槽位失败: {e!r}")
             return {}
 
+    def _require_style_reference(self, style: str) -> str:
+        selected = self._style(style)
+        try:
+            path = self._ref_library().style_image_path(selected)
+        except Exception:
+            path = ""
+        if not path or not os.path.isfile(path):
+            label = {STYLE_REALISTIC: "真人", STYLE_ANIME: "二次元", STYLE_DOLL: "玩偶"}[selected]
+            raise ValueError(f"还没有{label}画风的三视图参考图，请先到「自拍工作台 → 参考图」上传并设置{label}三视图")
+        return path
+
     def _reference_ready(self) -> bool:
-        """主站或副站至少填了一张参考图（没有参考图就不该出图）。"""
-        return any(self._ref_slots().values())
+        """当前默认画风必须有自己的三视图"""
+        try:
+            self._require_style_reference(self._style())
+            return True
+        except ValueError:
+            return False
+
+    def _doll_photo_prompt(self, prompt: str) -> str:
+        """最终适配之后锁定玩偶材质，移除通用人体模板里的冲突措辞"""
+        replacements = (
+            ("成年女性角色（二次元）", "毛绒玩偶角色"),
+            ("同一个二次元角色", "同一只毛绒玩偶"),
+            ("同一位二次元角色", "同一只毛绒玩偶"),
+            ("成年女性", "毛绒玩偶"), ("真人五官", "刺绣五官"),
+            ("真人脸", "玩偶绣线脸"), ("真人照片", "玩偶实物照片"),
+            ("同一个人", "同一只玩偶"), ("自然的皮肤质感", "柔软绒布质感"),
+            ("真实自然皮肤", "真实柔软绒布"), ("皮肤纹理", "绒布纹理"),
+            ("肤色", "布料颜色"), ("下颌线", "玩偶头部轮廓"),
+        )
+        for old, new in replacements:
+            prompt = prompt.replace(old, new)
+        return STYLE_BLOCK[STYLE_DOLL] + "\n" + prompt + (
+            "\n最终硬约束：主体只能是该玩偶三视图里的同一只毛绒公仔，保留二头身比例、"
+            "绣线五官、布料与缝线，动作按短小玩偶四肢合理改编，不能变成人体或真人皮肤，"
+            "角色服装也制成玩偶小衣服，镜头拍的是玩偶实物而非二次元人物插画"
+        )
 
     def _head_only_refs(self, scene: dict | None = None,
                         style: str | None = None) -> tuple | None:
@@ -3867,6 +4157,15 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         "single_ref", "head_only", "condition"}``；``explicit`` 为真表示要让
         image_transport 按站点直接贴这些图（没有配置时按单站点兜底）。
         """
+        selected_style = self._style(style)
+        if selected_style in (STYLE_ANIME, STYLE_DOLL):
+            try:
+                image = self._ref_library().style_image_path(selected_style)
+            except Exception:
+                image = ""
+            return {"main": (image,), "backup": (image,), "explicit": True,
+                    "ref": image or None, "face_ref": None, "single_ref": image or None,
+                    "head_only": False, "condition": None, "condition_slot": ""}
         legacy_ref, legacy_face, legacy_single = self._legacy_photo_refs(scene, style, look)
         bare_face = self._bare_face_ref_active(scene, style)
         plan = {
@@ -4604,7 +4903,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 if not self._can_trigger(event, text):
                     return
                 self._set_user_style(sender, pref_style)
-                style_name = "二次元" if pref_style == STYLE_ANIME else "真人"
+                style_name = {STYLE_ANIME: "二次元", STYLE_REALISTIC: "真人", STYLE_DOLL: "玩偶"}[pref_style]
                 await event.send(MessageChain([
                     Plain(f"好呀，以后给你拍的照片都用{style_name}风格啦～")
                 ]))
@@ -4790,8 +5089,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         desc = outfits[name]
         costume = {"name": name, "desc": desc}
 
-        # 3) 再 roll 一条特写（不会连着两次抽到同一条）
-        cue = self._pick_closeup_prompt(pm=False)
+        # 3) 先确定本次画风，玩偶随机池不混入固定真人的线稿
+        style_override = self._detect_style_request(text)
+        eff_style = style_override or self._user_style(sender)
+        cue = (self._pick_closeup_prompt(pm=False) if self._style(eff_style) != STYLE_DOLL
+               else self._pick_closeup_prompt(pm=False, allow_sketch=False))
         if not cue or cue.get("error"):
             await event.send(MessageChain([Plain("特写池好像有点问题，等会儿再试？")]))
             return True
@@ -4814,8 +5116,6 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             f"[selfie] 随机衣服特写：衣柜 {total} 套 -> 第 {pick_idx + 1} 套「{name}」；"
             f"特写池 {cue_total} 条 -> 第 {cue.get('id')} 条"
         )
-        style_override = self._detect_style_request(text)
-        eff_style = style_override or self._user_style(sender)
         self._generating = True
         self._spawn_task(self._do_closeup(
             event, is_admin, sender, eff_style, {}, costume, cue, force_costume=True,
@@ -4919,10 +5219,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 await event.send(MessageChain([Plain("现在不太想拍嘛，等会儿再给你看～")]))
                 return True
 
-        cue = await self._pick_closeup_cue(event, pm, forced_id)
+        eff_style = style_override or self._user_style(sender)
+        # 玩偶随机池排除线稿；真人/二次元保留，明确指定玩偶线稿用独立玩偶身份
+        allow_sketch = bool(forced_id) or self._style(eff_style) != STYLE_DOLL
+        cue = (await self._pick_closeup_cue(event, pm, forced_id) if allow_sketch else
+               await self._pick_closeup_cue(event, pm, forced_id, allow_sketch=False))
         if cue is None:
             return True
-        eff_style = style_override or self._user_style(sender)
         if costume:
             # 换装：统一回「我去找一件xxx，你要的是这个对吧」，方便对方一眼纠错
             if self._natural_chat_enabled():
@@ -5111,6 +5414,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
     ACK_FALLBACK = {
         STYLE_ANIME: ["马上给你拍张二次元的", "等我摆个二次元姿势", "好呀，这就去拍"],
         STYLE_REALISTIC: ["好呀，我拍张真人版的", "等我理一下头发就拍", "这就拍张写实的给你"],
+        STYLE_DOLL: ["好呀，这就拍张玩偶版的", "等我摆好小玩偶给你拍", "这就拍张毛绒公仔给你"],
     }
     ACK_FALLBACK_DEFAULT = [
         "马上拍给你", "等我摆个姿势", "好呀，我这就拍", "等我整理一下头发", "收到，来自拍一张",
@@ -5259,6 +5563,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             hints.append("对方点名要二次元动漫风格，可以顺口提一句。")
         elif style_override == STYLE_REALISTIC:
             hints.append("对方点名要写实真人风格，可以顺口提一句。")
+        elif style_override == STYLE_DOLL:
+            hints.append("对方点名要毛绒玩偶风格，可以顺口提一句，不要说成真人。")
         system, prompt = dialogue.ack_prompts(
             persona=await self._persona_prompt(event, conversation_persona),
             user_text=self._clean_text(event) if event is not None else "",
@@ -5336,6 +5642,8 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                 style_hint = "对方还点名要这张用二次元动漫风格，可以顺口提一句。"
             elif style_override == STYLE_REALISTIC:
                 style_hint = "对方还点名要这张用写实真人照片风格，可以顺口提一句。"
+            elif style_override == STYLE_DOLL:
+                style_hint = "对方点名要毛绒玩偶实物摄影风格，可以顺口提一句，不是真人。"
             else:
                 style_hint = ""
             look_hints = []

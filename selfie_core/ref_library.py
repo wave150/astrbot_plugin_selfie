@@ -37,6 +37,8 @@ import threading
 import time
 import uuid
 
+STYLES = ("anime", "realistic", "doll")
+STYLE_IMAGE_STYLES = ("anime", "doll")
 SLOTS = ("main1", "main2", "backup1", "backup2")
 SLOT_LABELS = {
     "main1": "主站参考图1（全身三视图）",
@@ -74,6 +76,8 @@ def empty_document():
         # 夜间素颜：22:00 到次日 07:00 在室内睡觉房间时，脸部参考图换成这张素颜三视图
         "suyan": {"enabled": False, "image": ""},
         "images": {},
+        # 真人仍使用既有槽位；二次元 / 玩偶各自保存独立三视图，不互相兜底。
+        "style_images": {},
         "conditions": [],
     }
 
@@ -642,6 +646,15 @@ class ReferenceLibrary:
         base = empty_document()
         images = document.get("images")
         base["images"] = images if isinstance(images, dict) else {}
+        style_images = document.get("style_images")
+        if isinstance(style_images, dict):
+            base["style_images"] = {
+                style: image_id for style, image_id in style_images.items()
+                if style in STYLE_IMAGE_STYLES and isinstance(image_id, str)
+                and _ID.fullmatch(image_id)
+                and isinstance(base["images"].get(image_id), dict)
+                and self.image_path(image_id)
+            }
         conditions = document.get("conditions")
         base["conditions"] = merge_equivalent_conditions(
             [item for item in conditions if isinstance(item, dict)]) \
@@ -697,6 +710,9 @@ class ReferenceLibrary:
             "images": images,
             "main": dict(document["main"]),
             "backup": dict(document["backup"]),
+            "style_images": {style: image_id
+                             for style, image_id in document["style_images"].items()
+                             if self.image_path(image_id)},
             "suyan": {"enabled": bool((document.get("suyan") or {}).get("enabled")),
                       "image": str((document.get("suyan") or {}).get("image") or "")},
             "conditions": [public_condition(item) for item in document["conditions"]],
@@ -812,6 +828,10 @@ class ReferenceLibrary:
                 updated_conditions += 1
                 kept.append(condition)
             document["images"].pop(image_id, None)
+            document["style_images"] = {
+                style: value for style, value in document["style_images"].items()
+                if value != image_id
+            }
             document["conditions"] = kept
             for key in ("body", "head"):
                 if document["main"].get(key) == image_id:
@@ -832,6 +852,49 @@ class ReferenceLibrary:
                     "conditions_updated": updated_conditions}
 
     # ---- 槽位与条件 ----
+
+    def save_style_image(self, style, image_id):
+        """保存二次元 / 玩偶的独立三视图；空编号清除，真人仍走原有槽位。"""
+        if not isinstance(style, str) or style not in STYLE_IMAGE_STYLES:
+            raise RefLibraryError("画风无效，请选择 anime / doll；真人请设置主参考图1")
+        image_id = _text(image_id, 40, "参考图编号")
+        with self._mutex:
+            document = self._load()
+            if image_id:
+                if (not _ID.fullmatch(image_id)
+                        or not isinstance(document["images"].get(image_id), dict)
+                        or not self.image_path(image_id)):
+                    raise RefLibraryError("参考图不存在，请刷新后重试")
+                document["style_images"][style] = image_id
+            else:
+                document["style_images"].pop(style, None)
+            self._save(document)
+            return self.snapshot()
+
+    def style_image_path(self, style):
+        """指定画风的三视图；缺失返回空串，绝不借用其它画风或头部 / 素颜图。
+
+        真人优先现有主站全身图，其次已启用的副站图；不修改原有槽位行为。
+        """
+        if not isinstance(style, str) or style not in STYLES:
+            raise RefLibraryError("画风无效，请选择 anime / realistic / doll")
+        document = self.document()
+
+        def path(image_id):
+            if not isinstance(image_id, str) or not _ID.fullmatch(image_id):
+                return ""
+            if not isinstance(document["images"].get(image_id), dict):
+                return ""
+            return self.image_path(image_id)
+
+        if style != "realistic":
+            return path(document["style_images"].get(style))
+        main_path = path(document["main"].get("body"))
+        if main_path:
+            return main_path
+        if document["backup"].get("enabled"):
+            return path(document["backup"].get("image"))
+        return ""
 
     def save_slots(self, payload):
         with self._mutex:
