@@ -1651,8 +1651,10 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             from PIL import Image as PILImage
             import io
             with PILImage.open(io.BytesIO(data)) as im:
-                im = im.convert("RGB")
                 w, h = im.size
+                if w * h > 25_000_000:
+                    return None
+                im = im.convert("RGB")
                 if max(w, h) > COS_IMAGE_MAX:
                     scale = COS_IMAGE_MAX / float(max(w, h))
                     im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), PILImage.LANCZOS)
@@ -1749,18 +1751,20 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
     async def _cos_search_chat(self, prompt: str, image_paths=None) -> str:
         """只复用 AstrBot 模型，不擅自调用生图中转站的文字接口"""
-        provider = None
-        try:
-            pid = self._caption_provider_id()
-            if pid:
-                provider = self.context.get_provider_by_id(pid)
-        except Exception:
-            provider = None
+        paths = list(image_paths or [])
+        provider = self.context.get_using_provider() if not paths else None
         if provider is None:
+            try:
+                pid = self._caption_provider_id()
+                if pid:
+                    provider = self.context.get_provider_by_id(pid)
+            except Exception:
+                provider = None
+        if provider is None and paths:
             provider = self.context.get_using_provider()
         if provider is None:
             return ""
-        response = await provider.text_chat(prompt=prompt, image_urls=list(image_paths or []))
+        response = await provider.text_chat(prompt=prompt, image_urls=paths)
         return str(getattr(response, "completion_text", "") or "")
 
     async def _search_cos_anilist(self, query: str) -> list[dict]:
@@ -1866,7 +1870,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _search_character_images(self, name: str, *, rejected=()) -> list[dict]:
-        """默认智能消歧，人物匹配且可辨主要服装即可；关闭开关保留旧搜索"""
+        """默认智能消歧并排序，由用户确认角色与服装；关闭开关保留旧搜索"""
         if bool(self._cfg("cos_smart_search", True)):
             try:
                 from .selfie_core.cos_search import search_cos_images
@@ -1892,10 +1896,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
                     "no_model": "没有可用的角色识别模型，请在 AstrBot 配置图片转述模型",
                     "model_error": "角色识别模型调用失败，请查看 AstrBot 的模型调用日志",
                     "parse_error": "角色识别模型没有返回有效结果，可以补充作品或角色全名后重试",
-                    "verification_error": "候选图片的看图核验没有成功，请查看 AstrBot 的模型调用日志",
                 }
                 raise ValueError(messages.get(result.reason,
-                    f"暂时没找到人物匹配且能看清主要服装的「{name}」图片，可以补充作品名或服装描述后再找"))
+                    f"暂时没找到能下载并发给你确认的「{name}」候选图，可以补充作品名或服装描述后再找"))
             return result.items
         raw = await self._search_bangumi(name)
         if not raw:
@@ -2233,6 +2236,13 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         style_block = STYLE_BLOCK[style]
         expression = self.rng.choice(EXPRESSIONS)
         gesture = self.rng.choice(GESTURES)
+        shot_intro = (DOLL_SELFIE_INTRO if style == STYLE_DOLL else
+                      "拍一张" + SELFIE_SHOT_INTRO)
+        framing = (DOLL_SELFIE_FRAMING if style == STYLE_DOLL else
+                   "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）：")
+        grip = (DOLL_SELFIE_GRIP + "；" if style == STYLE_DOLL else
+                "镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
+                "手掌在镜头外，照片里只有这条手臂；")
         hair_from_character = bool(look.get("cos_hair_from_character"))
         face_lock = ""
         face_remind = ""
@@ -2307,24 +2317,18 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             head = (
                 f"{ref_desc}"
                 f"{face_lock}"
-                f"{role}，拍一张手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
-                "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）："
+                f"{role}，{shot_intro}{framing}"
                 f"{style_block}"
                 f"{base_line.format(no_hat=no_hat)}"
                 f"{cos_line}"
-                "镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
-                "手掌在镜头外，照片里只有这条手臂；"
-                f"另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
+                f"{grip}另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
                 f"{same_person}，衣服严格按上面这段描述来拍。"
             )
         else:
             head = (
-                "手机前置摄像头自拍的第一人称视角照片，9:16竖屏构图，"
-                "近距离自拍特写（只拍到腰部以上，脸和上半身占满整张照片）："
+                f"{DOLL_SELFIE_INTRO if style == STYLE_DOLL else SELFIE_SHOT_INTRO}{framing}"
                 f"{style_block}"
-                "镜头就在正前方，她朝镜头伸出一只手臂，前臂从镜头右下方斜着伸向镜头、"
-                "手掌在镜头外，照片里只有这条手臂；"
-                f"另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
+                f"{grip}另一只手{gesture}；脸在照片上方占三分之一，{expression}，眼睛直视镜头。"
                 f"人物：参考图里的同一位成年女性，{no_hat}；穿{costume_desc}。"
                 f"{cos_line}"
             )
@@ -2336,6 +2340,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             + STYLE_QUALITY[style]
             + self._scene_hard_note(scene)
             + face_remind
+            + (DOLL_SELFIE_RULE if style == STYLE_DOLL else "")
         )
 
     def _cos_self_ref(self, scene: dict | None = None,
@@ -2414,7 +2419,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             candidates = await self._search_character_images(cos_name, rejected=rejected)
             if not candidates:
                 await event.send(MessageChain([
-                    Plain((f"暂时没找到人物匹配且能看清主要服装的「{cos_name}」图片，"
+                    Plain((f"暂时没找到能发给你确认的「{cos_name}」候选图，"
                            "可以补充作品名、角色全名或服装描述后再试"
                            if bool(self._cfg("cos_smart_search", True)) else
                            f"没搜到「{cos_name}」的图……给我个日文名/英文名，或者说得更具体一点？"))
@@ -2438,9 +2443,9 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             first = candidates[0]
             await event.send(MessageChain([
                 Image.fromFileSystem(first["path"]),
-                Plain(f"我找到的是「{first['name']}」" +
+                Plain(f"这是按「{first['name']}」" +
                       (f" · {first['work']}" if first.get('work') else "") +
-                      "，是这个角色和服装吗？（回「是」开始 cos；回「不是」换一张，也可以补充作品或服装描述重新找）"),
+                      "找到的候选图，你看是想要的角色和服装吗？（回「是」开始 cos；回「不是」换一张，也可以补充作品或服装描述重新找）"),
             ]))
             logger.info(f"[selfie] cos 候选已发送: {first['name']}（{first.get('source')}）")
         except ValueError as e:
@@ -2566,7 +2571,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         if COS_NO_PAT.search(core) or core in ("不", "否", "换一张", "再换一张", "再找找"):
             await self._next_cos_candidate(event)
             return True
-        if not COS_YES_PAT.match(core):
+        if not COS_YES_PAT.fullmatch(core):
             return False
         if not bool(self._cfg("cos_enabled", True)):
             self.state["cos_pending"] = {}
@@ -3604,7 +3609,7 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
 
         - 带参考图：以参考图中的同一角色为准（脸/发型），衣服按这次解析出来的 look
         - 不带参考图：纯文字人设
-        - 风格只有两种：纯二次元动漫 / 写实真人照片；用户当场点名的风格优先
+        - 支持二次元、真人和玩偶；玩偶自拍使用短手握杆的构图
         - 主人要求摘帽子/脱外套时，用 edit_note 明确让模型把参考图里的物件去掉
         - 动作只由 ``_photo_action`` 决定：睡觉 / 吃饭 / 事件动作都会顶替默认自拍姿势
         - ``selfie_action`` 由生图测试显式指定（名字/表情/手势），日常自拍传 None 随机抽
@@ -3660,6 +3665,31 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
         face_line = action["face_line"]
         light_line = action["light_line"]
         shot_intro = action["intro"]
+        action_tail = action["tail"]
+        # Event-specific photos explicitly replace the selfie framing; leave them alone.
+        doll_selfie = style == STYLE_DOLL and action["source"] != "event"
+        if doll_selfie:
+            shot_intro = DOLL_SELFIE_INTRO
+            if action["source"] == "default":
+                framing = DOLL_SELFIE_FRAMING
+                pose = f"{DOLL_SELFIE_GRIP}；另一只手{gesture}；"
+            elif action["source"] == "meal":
+                phone_grip = "一只手伸向镜头（镜头外拿着手机）"
+                if phone_grip in pose:
+                    pose = pose.replace(phone_grip, DOLL_SELFIE_GRIP)
+                else:
+                    pose = pose.replace("她一手扶着碗", DOLL_SELFIE_GRIP)
+                framing += "画面边缘要拍到握杆短手和手柄，保留餐桌与饭菜；"
+            elif action["source"] == "sleep":
+                framing = framing.replace("只拍到", "拍到") + "画面边缘留出握杆短手与手柄的位置；"
+                pose = re.sub(
+                    r"(?:一只手从被子里伸出来、|另一只手)?前臂朝镜头方向探出、"
+                    r"手掌落在镜头边缘之外(?:（照片里没有手机、没有自拍杆）)",
+                    DOLL_SELFIE_GRIP, pose)
+                action_tail = action_tail.replace("照片里不要出现手机、自拍杆，", "")
+                light_line = (light_line.replace("屏幕的冷白微光", "来自画外的冷白微光")
+                              .replace("伸向镜头的手", "握杆的短手")
+                              .replace("抓着被角的手", "握杆的短手"))
         if use_ref:
             if style == STYLE_REALISTIC:
                 ref_intro = (
@@ -3701,10 +3731,11 @@ class SelfiePlugin(WorkspaceHostMixin, WorldMixin, ImageTransportMixin, Star):
             "有清晰的环境细节、真实材质和自然光影，背景轻微虚化。"
             # 睡觉/网吧这类动作自己写死了灯光，就不再叠时段光线，免得两句打架
             + ("" if light_line else self._time_light_line(scene))
-            + action["tail"]
+            + action_tail
             + light_line
             + (self._tongue_line() if TONGUE_PAT.search(head) else "")
             + STYLE_QUALITY[style]
+            + (DOLL_SELFIE_RULE if doll_selfie else "")
         )
 
     def _tongue_line(self) -> str:
